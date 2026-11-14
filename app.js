@@ -69,7 +69,7 @@ const OPS = [
     keys: 'Click the matching unit',
     metric: { label: 'Decision time per unit', better: 'lower', fmt: fmtMs },
     prefixes: ['WPA-', 'UPA-', 'ORU-'],
-    crew: { base: [2100, 2250, 1980, 2200, 2050], today: 2900, extras: [['Wrong units', 1, true], ['Timed out', 0, false]], flags: { errors: 1 } },
+    crew: { base: [2100, 2250, 1980, 2200, 2050], today: 2900, extras: [['Wrong units', 1, true], ['Timed out', 0, false]], flags: { errors: 1, timeouts: 0 } },
   },
   {
     id: 'drill', name: 'Run an emergency drill', short: 'Emergency drill', img: 'drill.jpg',
@@ -102,7 +102,7 @@ const OPS = [
     instr: 'Study the 12 vials in the glovebox rack for 6 seconds; the caps then close. For each line of the experiment record, pick the vial that holds that sample. The second rack is turned 180° after capping, as when you reach in from the other glove port: find the sample where it is now. Two racks, three samples each.',
     keys: 'Click the vial',
     metric: { label: 'Recall accuracy', better: 'higher', fmt: fmtPct },
-    crew: { base: [83, 100, 83, 83, 100], today: 50, extras: [['Wrong vials', 3, true], ['Median time per sample', '3.6 s', false]], flags: { errors: 3 } },
+    crew: { base: [83, 100, 83, 83, 100], today: 50, extras: [['Wrong vials', 3, true], ['Median time per sample', '3.6 s', false]], flags: { errors: 3, rotErrors: 2, medTime: 3600 } },
   },
 ];
 const opById = (id) => OPS.find((o) => o.id === id);
@@ -658,7 +658,7 @@ function captureCheck(stage, op, done) {
       metric: valid ? Math.round(median(S.rts)) : NaN, valid,
       extras: [['Captures', `${S.rts.length} / ${NEED}`, S.rts.length < NEED], ['Premature captures', S.premature, S.premature > 0],
         ['Missed CAPTURE windows', S.missed, S.missed > 0], ['Captures off target', S.off, S.off > 0]],
-      flags: { premature: S.premature, missed: S.missed, off: S.off },
+      flags: { premature: S.premature, missed: S.missed, off: S.off, captures: S.rts.length },
     });
   }
   function start() {
@@ -779,7 +779,7 @@ function monitorCheck(stage, op, done) {
     done({
       metric: valid ? Math.round(median(S.rts)) : NaN, valid,
       extras: [['Excursions caught', `${S.caught} / ${S.caught + S.missed}`, S.missed > 0], ['Missed excursions', S.missed, S.missed > 0], ['False flags', S.falses, S.falses > 1]],
-      flags: { missed: S.missed, falses: S.falses },
+      flags: { missed: S.missed, falses: S.falses, caught: S.caught },
     });
   }
   reset(); draw();
@@ -997,7 +997,7 @@ function verifyCheck(stage, op, done) {
     done({
       metric: valid ? Math.round(median(S.times)) : NaN, valid,
       extras: [['Correct units', `${TRIALS - S.errors} / ${TRIALS}`, S.errors > 0], ['Wrong units', S.errors - S.timeouts, S.errors - S.timeouts > 0], ['Timed out', S.timeouts, S.timeouts > 0]],
-      flags: { errors: S.errors },
+      flags: { errors: S.errors, timeouts: S.timeouts },
     });
   }
   stage.innerHTML = '<div class="sim-box seq-card rack"><div class="rack-view"></div><div class="rack-ui"></div></div>';
@@ -1400,7 +1400,7 @@ function trayCheck(stage, op, done) {
     $('.tr-phase', stage).textContent = `Sample ${S.ask + 1} of ${PER}`;
     $('.tr-ask', stage).textContent = `Transfer SMP-${S.codes[S.asks[S.ask]]}`;
     if (v3) v3.pump(LIMIT + 300);
-    runTimer(LIMIT, () => { S.timeouts++; S.errors++; score(); reveal(null); });
+    runTimer(LIMIT, () => { S.timeouts++; S.errors++; if (S.round === 1) S.rotErrors++; score(); reveal(null); });
   }
   function reveal(clicked) {
     clearTimeout(S.timer); cancelAnimationFrame(S.raf);
@@ -1418,7 +1418,7 @@ function trayCheck(stage, op, done) {
   function answer(b) {
     if (!S.on || S.phase !== 'recall' || b.disabled) return;
     S.times.push(performance.now() - S.t0);
-    if (+b.dataset.i === S.asks[S.ask]) S.correct++; else S.errors++;
+    if (+b.dataset.i === S.asks[S.ask]) S.correct++; else { S.errors++; if (S.round === 1) S.rotErrors++; }
     score(); reveal(b);
   }
   function finish() {
@@ -1428,11 +1428,11 @@ function trayCheck(stage, op, done) {
       metric: (S.correct / total) * 100, valid: true,
       extras: [['Samples found', `${S.correct} / ${total}`, S.correct < total], ['Wrong vials', S.errors - S.timeouts, S.errors - S.timeouts > 0],
         ['Timed out', S.timeouts, S.timeouts > 0], ['Median time per sample', S.times.length ? `${(median(S.times) / 1000).toFixed(1)} s` : '—', false]],
-      flags: { errors: S.errors },
+      flags: { errors: S.errors, rotErrors: S.rotErrors, medTime: S.times.length ? median(S.times) : 0 },
     });
   }
   slots.forEach((b) => b.addEventListener('click', () => answer(b)));
-  overlay(box, 'Open the sample rack', () => { Object.assign(S, { round: 0, correct: 0, errors: 0, timeouts: 0, times: [], on: true }); score(); startRound(); },
+  overlay(box, 'Open the sample rack', () => { Object.assign(S, { round: 0, correct: 0, errors: 0, rotErrors: 0, timeouts: 0, times: [], on: true }); score(); startRound(); },
     '6 seconds to memorise 12 vials. The second rack is turned around before you recall.');
   return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); if (v3) v3.dispose(); }, running: () => S.on, key: () => false };
 }
@@ -1471,6 +1471,146 @@ function evaluate(today, base) {
 // =========================================================
 // Results
 // =========================================================
+// =========================================================
+// Readiness indicators — shown after every check
+// Psychomotor / cognitive indicators derived from the task, each with a
+// reference range ("norm") and the deviation from it. Demo reference ranges
+// for this prototype, not clinical norms.
+// =========================================================
+const BORDER = 0.2;   // up to 20 % beyond a limit = borderline, further = out of range
+// value-type indicator: lower or higher is better
+function indValue(key, name, domain, value, unit, fmt, norm, tip) {
+  const { max, min } = norm;
+  let status = 'ok', dev = 0;
+  if (max != null && value > max) { dev = (value - max) / max; status = dev <= BORDER ? 'border' : 'out'; }
+  if (min != null && value < min) { dev = (min - value) / min; status = dev <= BORDER ? 'border' : 'out'; }
+  const normText = max != null && min != null ? `${fmt(min)}–${fmt(max)}` : max != null ? `≤ ${fmt(max)}` : `≥ ${fmt(min)}`;
+  const devText = status === 'ok' ? 'within norm'
+    : max != null && value > max ? `+${Math.round(dev * 100)}% above the limit` : `${Math.round(dev * 100)}% below the limit`;
+  // scale for the bar
+  const top = max != null ? Math.max(max * 1.8, value * 1.1) : Math.max(min * 1.4, value * 1.1, unit === '%' ? 100 : 0);
+  const band = max != null ? [min || 0, max] : [min, top];
+  return { key, name, domain, value: fmt(value), normText, devText, status, tip, bar: { v: value / top, a: band[0] / top, b: band[1] / top } };
+}
+// count-type indicator: number of events, norm = at most `allowed`
+function indCount(key, name, domain, n, allowed, tip) {
+  n = n || 0;
+  const status = n <= allowed ? 'ok' : n === allowed + 1 ? 'border' : 'out';
+  const top = Math.max(allowed + 3, n + 1);
+  return { key, name, domain, value: String(n), normText: allowed ? `≤ ${allowed}` : '0', devText: status === 'ok' ? 'within norm' : `+${n - allowed} over the norm`,
+    status, tip, bar: { v: n / top, a: 0, b: (allowed + 0.5) / top } };
+}
+const ms = (v) => `${Math.round(v)} ms`, pct = (v) => `${Math.round(v)}%`, sec = (v) => `${(v / 1000).toFixed(1)} s`;
+const hrs = (m) => `${Math.floor(m / 60)} h ${String(Math.round(m % 60)).padStart(2, '0')}`;
+
+const INDICATORS = {
+  cygnus: (t, f) => [
+    indValue('rt', 'Reaction to the partner\'s call', 'Psychomotor speed', t.metric, 'ms', ms, { max: 750 },
+      'Practise reacting to a spoken cue: let the partner call "capture" at random moments while you hold alignment.'),
+    indCount('premature', 'Premature actions', 'Impulse control', f.premature, 0,
+      'Keep the thumb off the trigger until the call; repeat "capture" aloud before acting.'),
+    indCount('missed', 'Missed command windows', 'Sustained attention', f.missed, 0,
+      'Ask the partner to count the capture window down aloud; take a short break before the task.'),
+    indCount('off', 'Actions off target', 'Hand–eye accuracy', f.off, 0,
+      'Slow the approach: align first, then wait — accuracy before speed.'),
+  ],
+  docking: (t, f) => [
+    indValue('rt', 'Time to detect an excursion', 'Vigilance / reaction', t.metric, 'ms', ms, { max: 1000 },
+      'Scan the indicators in a fixed order every few seconds instead of watching one.'),
+    indCount('missed', 'Missed excursions (lapses)', 'Sustained attention', f.missed, 0,
+      'Split the indicators with a partner during the final approach; lapses rise sharply with sleep loss.'),
+    indCount('falses', 'False alarms', 'Response inhibition', f.falses, 1,
+      'Before flagging, state the value and its limit aloud.'),
+  ],
+  solar: (t, f) => [
+    indValue('err', 'Torque error', 'Fine motor control', t.metric, '%', (v) => `${v.toFixed(1)}%`, { max: 5 },
+      'Drive the last part of each bolt slowly and watch the needle, not the tool.'),
+    indCount('seq', 'Sequence errors', 'Working memory', f.seq, 0,
+      'Have the IV crew member read the bolt order aloud before each bolt.'),
+    indCount('out', 'Bolts outside the window', 'Motor precision', f.out, 1,
+      'Ask the partner to read the torque back before you release.'),
+  ],
+  water: (t, f) => [
+    indValue('rt', 'Decision time per unit', 'Processing speed', t.metric, 'ms', ms, { max: 2500 },
+      'Read the ID in pairs of characters and compare pair by pair.'),
+    indValue('acc', 'Matching accuracy', 'Visual discrimination', ((6 - (f.errors || 0)) / 6) * 100, '%', pct, { min: 83 },
+      'Read the ID aloud character by character; let the partner check it against the work order.'),
+    indCount('timeouts', 'Work orders timed out', 'Decision under time pressure', f.timeouts, 0,
+      'Decide once all characters are checked — do not wait for certainty you cannot get.'),
+  ],
+  drill: (t, f) => [
+    indValue('rt', 'Alarm response time (3 steps)', 'Decision speed under stress', t.metric, 'ms', ms, { max: 6000 },
+      'Rehearse the response card: alarm type → first action → which hatch from where you are.'),
+    indCount('priority', 'Caution handled before warning', 'Prioritisation', f.priority, 0,
+      'Read the whole alarm board first; warnings always before cautions.'),
+    indCount('spatial', 'Wrong module or hatch', 'Spatial orientation', (f.wrongModule || 0) + (f.wrongHatch || 0), 1,
+      'Name your own module and the path to the alarm before moving; review the station layout.'),
+    indCount('resp', 'Wrong first response', 'Procedure recall', f.wrongResp, 0,
+      'Refresh the first-response mapping: fire → extinguisher, toxic → mask, depress → hatch.'),
+  ],
+  ultrasound: (t, f) => [
+    indValue('ot', 'Time on target', 'Visuomotor control', t.metric, '%', pct, { min: 50 },
+      'Brace the probe hand on the patient and make small corrections; follow one instruction at a time.'),
+    indCount('overpress', 'Vein collapsed (over-pressure)', 'Force control', f.overpress, 0,
+      'Use the lightest pressure that keeps contact; let the sonographer call "ease off".'),
+    indCount('early', 'Saves before the call', 'Impulse control', f.early, 0,
+      'Repeat "saving" after the SAVE call before pressing.'),
+    indCount('lost', 'Images lost before saving', 'Steadiness', f.lost, 1,
+      'Hold position for two seconds after the image fills before you save.'),
+  ],
+  experiment: (t, f) => [
+    indValue('acc', 'Recall accuracy', 'Working memory', t.metric, '%', pct, { min: 83 },
+      'Chunk the rack while studying: memorise rows of four as a short sequence.'),
+    indCount('rot', 'Errors after the rack was turned', 'Mental rotation', f.rotErrors, 1,
+      'Before picking, re-locate the A1 corner mark and count from it.'),
+    indValue('time', 'Median time per sample', 'Retrieval speed', f.medTime || 0, 'ms', sec, { max: 4000 },
+      'Name the slot aloud (row and letter) as soon as you read the record line.'),
+  ],
+};
+function sleepIndicators(t) {
+  return [
+    indValue('sleep', 'Sleep last night', 'Fatigue', t.sleep, 'min', hrs, { min: 420 },
+      'Protect the next sleep period (7–9 h); schedule demanding tasks after rest when the plan allows.'),
+    Object.assign(indValue('sleepy', 'Sleepiness (1–5)', 'Alertness', t.sleepy, '', (v) => `${v} / 5`, { max: 3 },
+      'A short rest, light and movement before the task; tell the partner how you feel.'),
+    t.sleepy > 3 ? { status: t.sleepy === 4 ? 'border' : 'out', devText: `+${t.sleepy - 3} above the limit` } : {}),
+  ];
+}
+const VERDICT = {
+  ready: ['Ready for this task', 'All indicators are within the norm.', 'ok'],
+  check: ['Ready with a cross-check', 'Some indicators are outside the norm. Do the task with a partner cross-check on the weak points below.', 'warn'],
+  review: ['Review before the task', 'Several indicators are outside the norm. Discuss with the partner (and the flight surgeon) whether to reassign, postpone or add support.', 'bad'],
+};
+function renderIndicators() {
+  const el = $('#indPanel');
+  const t = state.today, o = state.op;
+  if (!t || !t.valid || !INDICATORS[o.id]) { el.hidden = true; return; }
+  const f = t.flags || {};
+  const task = INDICATORS[o.id](t, f), fatigue = sleepIndicators(t);
+  const all = [...task, ...fatigue];
+  const out = all.filter((i) => i.status === 'out').length, border = all.filter((i) => i.status === 'border').length;
+  const flagged = state.evaluation && state.evaluation.flag;
+  const v = out >= 2 || (out >= 1 && flagged) ? 'review' : out === 1 || border >= 2 || flagged ? 'check' : border === 1 ? 'check' : 'ready';
+  const [title, text, cls] = VERDICT[v];
+  const row = (i) => `
+    <div class="ind ${i.status}">
+      <div class="ind-head"><span class="ind-name">${esc(i.name)}</span><span class="ind-domain">${esc(i.domain)}</span></div>
+      <div class="ind-bar"><i class="band" style="left:${Math.min(100, i.bar.a * 100)}%;width:${Math.max(0, Math.min(100, (i.bar.b - i.bar.a) * 100))}%"></i><b style="left:${Math.min(98.5, i.bar.v * 100)}%"></b></div>
+      <div class="ind-nums"><span class="ind-val">${esc(i.value)}</span><span>norm ${esc(i.normText)}</span><span class="ind-dev">${esc(i.devText)}</span></div>
+    </div>`;
+  const tips = all.filter((i) => i.status !== 'ok').sort((a, b) => (a.status === 'out' ? -1 : 1) - (b.status === 'out' ? -1 : 1)).map((i) => `<li><b>${esc(i.domain)}:</b> ${esc(i.tip)}</li>`);
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="ind-verdict ${cls}"><span class="label">Readiness for: ${esc(o.short)}</span><h3>${title}</h3><p>${text}</p>
+      <span class="ind-count">${all.length - out - border} in norm · ${border} borderline · ${out} out of norm</span></div>
+    <h4 class="ind-sub">Task indicators</h4>
+    <div class="ind-grid">${task.map(row).join('')}</div>
+    <h4 class="ind-sub">Fatigue</h4>
+    <div class="ind-grid">${fatigue.map(row).join('')}</div>
+    ${tips.length ? `<h4 class="ind-sub">What to improve</h4><ul class="ind-tips">${tips.join('')}</ul>` : '<p class="ind-good">Nothing to improve today — keep the standard procedure.</p>'}
+    <p class="ind-note">Psychomotor and cognitive indicators derived from this check. Reference ranges are demonstration values for this prototype, not clinical norms; this is not a medical or fitness-for-duty assessment. The crew decides with the flight surgeon.</p>`;
+}
+
 function renderResults() {
   const t = state.today, b = state.baseline, o = state.op, m = o.metric;
   if (!t) return;
@@ -1528,6 +1668,7 @@ function renderResults() {
       <li class="${ev.c.sleepy ? 'met' : ''}">or sleepiness ${RULE.sleepy}–5 of 5</li></ul>
       <p>Demo thresholds for the hackathon scenario. The card explains what changed; the crew decides how to proceed.</p>`;
   } else rule.hidden = true;
+  renderIndicators();
 }
 
 $('#btnDemoBaseline').addEventListener('click', () => { useSimulatedBaseline(); renderResults(); toast('Simulated five-check baseline loaded'); });
