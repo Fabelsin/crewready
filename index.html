@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CrewReady</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <button class="brand" data-go="home" aria-label="CrewReady home"><span class="logo" aria-hidden="true"></span>CrewReady</button>
+  <div class="topbar-right">
+    <span id="modeBadge" class="badge" hidden></span>
+    <span class="badge badge-muted">Hackathon prototype</span>
+  </div>
+</header>
+
+<main>
+  <!-- HOME -->
+  <section id="screen-home" class="screen active">
+    <p class="eyebrow">Pre-task readiness check</p>
+    <h1>Check your attention before a critical task.</h1>
+    <p class="lead">Log your sleep, take a short reaction check, see how today compares with your usual — then agree with your partner on which step to double-check.</p>
+    <div class="cta-row">
+      <button class="btn btn-primary btn-lg" id="btnGuest">Try the reaction test</button>
+      <button class="btn btn-lg" id="btnCrew">Run crew scenario</button>
+    </div>
+    <ol class="flow">
+      <li><b>1</b>Task &amp; sleep</li>
+      <li><b>2</b>Reaction check</li>
+      <li><b>3</b>Today vs usual</li>
+      <li><b>4</b>Rehearse the critical step</li>
+      <li><b>5</b>Agree with partner</li>
+    </ol>
+    <p class="fineprint">The demo test lasts 25 s. It follows the idea of the Reaction Self-Test used on the ISS (a 3-minute psychomotor vigilance test). This prototype is not a validated medical or fitness-for-duty measure — the crew makes every decision.</p>
+  </section>
+
+  <!-- BRIEF -->
+  <section id="screen-brief" class="screen">
+    <div class="sim-banner" data-crew-only>Simulated crew data — prefilled profile for the demo</div>
+    <p class="eyebrow">Step 1 · Before the task</p>
+    <h2>Upcoming task</h2>
+    <div id="opList" class="op-list" role="radiogroup" aria-label="Upcoming task"></div>
+
+    <div class="grid2">
+      <div class="field">
+        <span class="label">Sleep last night</span>
+        <div class="sleep-inputs">
+          <input id="sleepH" type="number" inputmode="numeric" min="0" max="14" value="7" aria-label="Hours"> <span>h</span>
+          <input id="sleepM" type="number" inputmode="numeric" min="0" max="59" step="5" value="0" aria-label="Minutes"> <span>min</span>
+        </div>
+      </div>
+      <div class="field">
+        <span class="label" id="sleepyLbl">Sleepiness right now</span>
+        <div class="seg" id="sleepiness" role="radiogroup" aria-labelledby="sleepyLbl"></div>
+        <div class="seg-legend"><span>1 · wide awake</span><span>5 · struggling to stay awake</span></div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-ghost" data-go="home">Back</button>
+      <button class="btn btn-primary" id="btnStartCheck">Start reaction check</button>
+    </div>
+  </section>
+
+  <!-- TEST -->
+  <section id="screen-test" class="screen">
+    <p class="eyebrow">Step 2 · Reaction check <span class="tag">Demo test · 25 s</span></p>
+    <div id="testArea" class="test-area" tabindex="-1">
+      <div id="testIntro" class="test-intro">
+        <p class="test-instr">Keep a finger on <kbd>Space</kbd>. Press it the moment the signal lights up.<br>Don't press before it appears.</p>
+        <button class="btn btn-primary btn-lg" id="btnBeginTest">Begin</button>
+      </div>
+      <div id="signal" class="signal" aria-hidden="true"></div>
+      <p id="testFeedback" class="test-feedback" aria-live="polite"></p>
+    </div>
+    <div class="progress"><div id="testProgress"></div></div>
+    <div class="actions">
+      <button class="btn btn-ghost" id="btnAbortTest">Cancel</button>
+      <span class="hint">Space or tap/click inside the panel</span>
+    </div>
+  </section>
+
+  <!-- RESULTS -->
+  <section id="screen-results" class="screen">
+    <div class="sim-banner" data-crew-only>Simulated crew data — five previous checks and today's recorded check</div>
+    <p class="eyebrow">Step 3 · Today vs your usual</p>
+    <div id="verdict" class="verdict"></div>
+    <table class="compare">
+      <thead><tr><th></th><th>Today</th><th>Your usual</th><th>Change</th></tr></thead>
+      <tbody id="compareBody"></tbody>
+    </table>
+    <div id="rulePanel" class="rule-panel"></div>
+    <div class="actions">
+      <button class="btn btn-ghost" id="btnRepeat">Repeat check</button>
+      <button class="btn btn-primary" id="btnToRehearse">Rehearse the critical step</button>
+    </div>
+  </section>
+
+  <!-- REHEARSE -->
+  <section id="screen-rehearse" class="screen">
+    <p class="eyebrow">Step 4 · Rehearse the critical step <span class="tag">Simplified simulation</span></p>
+    <h2 id="rehTitle">Capture Cygnus</h2>
+    <p class="muted">Align the reticle with the grapple fixture using <kbd>←</kbd> <kbd>→</kbd>. Even when aligned, wait for your backup operator. Press <kbd>Space</kbd> only on <b>CAPTURE</b>.</p>
+
+    <div class="reh-wrap">
+      <div id="field" class="field-sim">
+        <div class="track"></div>
+        <div id="target" class="target"><span></span></div>
+        <div id="reticle" class="reticle"></div>
+        <div id="rehOverlay" class="overlay">
+          <button class="btn btn-primary btn-lg" id="btnStartRound">Start round</button>
+        </div>
+      </div>
+      <aside class="cmd-panel">
+        <span class="label">Backup operator</span>
+        <div id="cmd" class="cmd hold">HOLD</div>
+        <div id="alignState" class="align-state">Not aligned</div>
+        <div class="pad">
+          <button class="btn pad-btn" id="padLeft" aria-label="Move left">◀</button>
+          <button class="btn pad-btn pad-cap" id="padCapture">Capture</button>
+          <button class="btn pad-btn" id="padRight" aria-label="Move right">▶</button>
+        </div>
+      </aside>
+    </div>
+
+    <div id="rehResult" class="reh-result" hidden></div>
+    <div class="actions">
+      <button class="btn btn-ghost" data-go="results">Back to results</button>
+      <button class="btn" id="btnRetry" hidden>Try again</button>
+      <button class="btn btn-primary" id="btnToPlan" hidden>Agree the next step</button>
+    </div>
+  </section>
+
+  <!-- PLAN -->
+  <section id="screen-plan" class="screen">
+    <p class="eyebrow">Step 5 · Agree with your partner</p>
+    <h2>Before the task</h2>
+    <div class="field">
+      <label class="label" for="agreement">Step to agree with the backup operator</label>
+      <textarea id="agreement" rows="3"></textarea>
+    </div>
+    <label class="check"><input type="checkbox" id="agreed"> Discussed with the backup operator</label>
+    <div class="field">
+      <span class="label">Summary for the crew</span>
+      <pre id="summary" class="summary"></pre>
+    </div>
+    <p class="fineprint">CrewReady explains what changed. Whether and how to proceed is the crew's decision.</p>
+    <div class="actions">
+      <button class="btn btn-ghost" data-go="home">Back to start</button>
+      <button class="btn btn-primary" id="btnCopy">Copy summary</button>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
