@@ -629,3 +629,44 @@ body.access-open { overflow: hidden; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   .intro-content > * { opacity: 1; transform: none; }
 }
+
+/* ---------- 3D views (scene3d.js) ---------- */
+.gl-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
+.sim-box.is3d { background: #000; }
+.field2d.is3d .grid-lines, .field2d.is3d .target { display: none; }
+.field2d.is3d .reticle { left: 50% !important; top: 50% !important; z-index: 2; width: 96px; height: 96px; margin: -48px 0 0 -48px; }
+.field2d.is3d::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0,0,0,.55) 100%); }
+.lee-hud { position: absolute; left: 12px; bottom: 12px; z-index: 2; display: flex; gap: 10px; align-items: center;
+  font: 600 12px var(--mono); color: #cdd6ea; background: rgba(3,5,10,.6); padding: 4px 10px; border-radius: 6px; letter-spacing: .06em; }
+.lee-hud b { color: #fff; font-weight: 700; }
+.off-arrow { position: absolute; z-index: 2; width: 0; height: 0; pointer-events: none;
+  border-top: 11px solid transparent; border-bottom: 11px solid transparent; border-left: 20px solid var(--blue-hi, #6aa8ff);
+  filter: drop-shadow(0 0 6px rgba(106,168,255,.7)); }
+.off-arrow[hidden] { display: none; }
+.dock-view { display: none; position: relative; min-height: 300px; overflow: hidden; }
+.dock-view.is3d { display: block; }
+.dock-box:has(.dock-view.is3d) { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.dock-box:has(.dock-view.is3d) .gauges { padding: 16px 12px; gap: 8px; border-left: 1px solid var(--line); background: rgba(3,5,10,.85); }
+.dock-box:has(.dock-view.is3d) .gauge-bar { width: 42px; }
+.cl-cross { position: absolute; left: 50%; top: 50%; width: 120px; height: 120px; margin: -60px 0 0 -60px; z-index: 2; pointer-events: none;
+  background: linear-gradient(var(--ok), var(--ok)) center/2px 100% no-repeat, linear-gradient(var(--ok), var(--ok)) center/100% 2px no-repeat; opacity: .55;
+  -webkit-mask: radial-gradient(circle, transparent 14px, #000 15px); mask: radial-gradient(circle, transparent 14px, #000 15px); }
+@media (max-width: 720px) { .dock-box:has(.dock-view.is3d) { grid-template-columns: 1fr; } .dock-box:has(.dock-view.is3d) .dock-view { min-height: 240px; } }
+.truss.is3d { height: clamp(240px, 34vh, 320px); border-radius: 10px; overflow: hidden; border: 1px solid var(--line-2); }
+.truss.is3d .truss-beam, .truss.is3d .array-wing { display: none; }
+.truss.is3d .ap { z-index: 2; width: 44px; height: 44px; margin: -22px 0 0 -22px; background: rgba(6,10,20,.3); border-color: rgba(207,216,234,.7); }
+.truss.is3d .ap span { transform: translateY(-36px); text-shadow: 0 1px 4px #000; }
+.rack-view { display: none; position: relative; overflow: hidden; border-radius: 10px; border: 1px solid var(--line-2); }
+.rack-view.is3d { display: block; height: clamp(200px, 28vh, 260px); }
+.rack-ui-in { display: flex; flex-direction: column; gap: 14px; }
+.iss-map.is3d { display: block; position: relative; height: clamp(260px, 38vh, 340px); border-radius: 10px; overflow: hidden; border: 1px solid var(--line-2); }
+.iss-map.is3d .mod { position: absolute; z-index: 2; transform: translate(-50%, -50%); min-height: 0; padding: 4px 8px; font-size: 12px; background: rgba(6,10,20,.55); border-color: rgba(154,166,194,.35); white-space: nowrap; }
+.iss-map.is3d .mod.hit { background: rgba(52,211,153,.35); }
+.iss-map.is3d .mod.miss { animation: none; background: rgba(255,92,92,.4); }
+.us-screen.is3d .us-fan, .us-screen.is3d .us-vessel, .us-screen.is3d .us-probe { display: none; }
+.us-inset { position: absolute; right: 12px; bottom: 12px; z-index: 2; width: 220px; height: 150px; border-radius: 6px; background: #000; box-shadow: 0 4px 18px rgba(0,0,0,.5); pointer-events: none; }
+@media (max-width: 720px) { .us-inset { width: 150px; height: 102px; } }
+.tray-view { display: none; position: relative; overflow: hidden; border-radius: 10px; border: 1px solid var(--line-2); }
+.tray-view.is3d { display: block; height: clamp(200px, 30vh, 280px); }
+.tray-ui-in { display: flex; flex-direction: column; gap: 14px; }

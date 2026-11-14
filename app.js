@@ -603,7 +603,9 @@ function captureCheck(stage, op, done) {
   const setCmd = (k) => { S.cmd = k; cmd.textContent = k === 'hold' ? 'HOLD' : 'CAPTURE'; cmd.className = `cmd ${k}`; };
   const aspect = () => box.clientWidth / Math.max(1, box.clientHeight);
   const dist = () => Math.hypot((S.x - S.tx) * aspect(), S.y - S.ty) / aspect();
+  const v3 = window.Scene3D ? Scene3D.cygnus(box, () => S) : null;   // 3D LEE-camera view; 2D stays as fallback
   const render = (aligned) => {
+    if (v3 && v3.ready) v3.frame(S, performance.now());
     tgt.style.left = `${S.tx * 100}%`; tgt.style.top = `${S.ty * 100}%`;
     ret.style.left = `${S.x * 100}%`; ret.style.top = `${S.y * 100}%`;
     ret.classList.toggle('aligned', aligned);
@@ -642,6 +644,7 @@ function captureCheck(stage, op, done) {
     if (S.cmd === 'hold') { S.premature++; toast('Premature capture: wait for the CAPTURE call'); return; }
     if (!aligned) { S.off++; toast('CAPTURE was called, but you were off the fixture'); return; }
     S.rts.push(performance.now() - S.shownAt);
+    if (v3 && v3.api) v3.api.capture(performance.now());
     setCmd('hold'); S.alignedFor = 0; S.goAt = null;
     box.classList.add('flash'); setTimeout(() => box.classList.remove('flash'), 350);
     if (S.rts.length >= NEED) { finish(); return; }
@@ -675,7 +678,7 @@ function captureCheck(stage, op, done) {
   });
   const KEYMAP = { ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right', ArrowUp: 'up', w: 'up', W: 'up', ArrowDown: 'down', s: 'down', S: 'down' };
   return {
-    stop: () => L.stop(), running: () => L.on,
+    stop: () => { L.stop(); if (v3) v3.dispose(); }, running: () => L.on,
     key(e, down) {
       if (KEYMAP[e.key]) { S.keys[KEYMAP[e.key]] = down; return L.on; }
       if (down && e.code === 'Space' && L.on) { if (!e.repeat) act(); return true; }
@@ -691,7 +694,8 @@ function monitorCheck(stage, op, done) {
   const G = op.gauges;
   const ROUND = 30000, REACT = 3000;
   stage.innerHTML = `
-    <div class="sim-box">
+    <div class="sim-box dock-box">
+      <div class="dock-view"></div>
       <div class="gauges">${G.map((g, i) => `
         <div class="gauge">
           <div class="gauge-name">${esc(g.name)}<br>(${esc(g.unit)})</div>
@@ -713,6 +717,7 @@ function monitorCheck(stage, op, done) {
     return { el, needle: $('.gauge-needle', el), val: $('.gauge-val', el), pct };
   });
   const S = { t0: 0, v: [], target: [], drift: -1, outAt: 0, nextAt: 0, caught: 0, missed: 0, falses: 0, rts: [], ack: new Set() };
+  const v3 = window.Scene3D ? Scene3D.docking($('.dock-view', stage), () => ({ v: S.v, t0: S.t0, running: L.on })) : null;   // 3D centerline view
   const isOut = (i) => S.v[i] < G[i].lo || S.v[i] > G[i].hi;
   const reset = () => {
     S.v = G.map((g) => (g.lo + g.hi) / 2); S.target = [...S.v];
@@ -727,6 +732,7 @@ function monitorCheck(stage, op, done) {
       e.el.classList.toggle('acked', S.ack.has(i));
     });
     $('.m-score', stage).textContent = `Caught ${S.caught} · Missed ${S.missed} · False flags ${S.falses}`;
+    if (v3 && v3.ready) v3.frame({ v: S.v, t0: S.t0, running: L.on }, performance.now());
   };
   const endExcursion = (now) => {
     const g = G[S.drift];
@@ -784,7 +790,7 @@ function monitorCheck(stage, op, done) {
   });
   $$('[data-flag]', stage).forEach((b) => b.addEventListener('click', () => flag(+b.dataset.flag)));
   return {
-    stop: () => L.stop(), running: () => L.on,
+    stop: () => { L.stop(); if (v3) v3.dispose(); }, running: () => L.on,
     key(e, down) {
       if (!L.on || !down) return false;
       const n = ['1', '2', '3'].indexOf(e.key);
@@ -817,6 +823,12 @@ function torqueCheck(stage, op, done) {
     </div>`;
   const box = $('.eva', stage), holdBtn = $('.hold-btn', stage);
   const S = { order: [], idx: 0, active: null, win: 0, torque: 0, holding: false, holdT: 0, errors: [], seqErr: 0, outCount: 0, t0: 0, phase: 'idle', memoT: 0 };
+  const evaState = () => {
+    const points = {};
+    $$('.ap', stage).forEach((el) => { points[el.dataset.p] = { active: el.classList.contains('active'), good: el.classList.contains('good'), warn: el.classList.contains('warn') }; });
+    return { points, torque: S.torque, holding: S.holding, active: S.active ? S.active.dataset.p : null };
+  };
+  const v3 = window.Scene3D ? Scene3D.eva($('.truss', stage), evaState) : null;   // 3D truss with the iROSA
   // torque grows with the time the tool is held (wall clock), slightly accelerating
   const torqueAt = (now) => { const t = (now - S.holdT) / 1000; return RATE * t + 7 * t * t; };
   const setTorque = (v) => {
@@ -831,6 +843,7 @@ function torqueCheck(stage, op, done) {
     w.style.left = `${c - 4}%`; w.style.width = '8%';
   };
   const L = loop((now, dt) => {
+    if (v3 && v3.ready) v3.frame(evaState(), now);
     if (S.phase === 'memo') {
       const p = Math.min(1, (now - S.memoT) / MEMO);
       $('.eva-order .timer-bar > div', stage).style.width = `${(1 - p) * 100}%`;
@@ -906,7 +919,7 @@ function torqueCheck(stage, op, done) {
   holdBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); press(); holdBtn.setPointerCapture(e.pointerId); });
   ['pointerup', 'pointercancel'].forEach((ev) => holdBtn.addEventListener(ev, () => release()));
   return {
-    stop: () => { L.stop(); S.holding = false; }, running: () => L.on,
+    stop: () => { L.stop(); S.holding = false; if (v3) v3.dispose(); }, running: () => L.on,
     key(e, down) {
       if (!L.on || e.code !== 'Space') return false;
       if (down && !e.repeat) press(); else if (!down) release();
@@ -922,7 +935,7 @@ const LOOKALIKE = { 8: 'B', B: '8', 0: 'O', O: '0', 1: 'I', I: '1', 5: 'S', S: '
 const CODE_CHARS = '0123456789ABCDEFGHJKLMNPRSTUVXZ'.split('');
 function verifyCheck(stage, op, done) {
   const TRIALS = 6, LIMIT = 6000;
-  const S = { trial: 0, errors: 0, timeouts: 0, times: [], on: false, t0: 0, timer: 0, raf: 0 };
+  const S = { trial: 0, errors: 0, timeouts: 0, times: [], on: false, t0: 0, timer: 0, raf: 0, pick: -1, ok: null, pickAt: 0, answer: -1 };
   const makeCode = () => {
     const pool = Object.keys(LOOKALIKE);
     let body = '';
@@ -946,8 +959,9 @@ function verifyCheck(stage, op, done) {
     clearTimeout(S.timer); cancelAnimationFrame(S.raf);
     if (S.trial >= TRIALS) { finish(); return; }
     const code = makeCode(), opts = variants(code);
-    stage.innerHTML = `
-      <div class="sim-box seq-card rack">
+    S.pick = -1; S.ok = null; S.pickAt = 0; S.answer = -1;
+    $('.rack-ui', stage).innerHTML = `
+      <div class="rack-ui-in">
         <div class="seq-status"><span>Work order ${S.trial + 1} of ${TRIALS}</span><span>Wrong units: ${S.errors}</span></div>
         <div class="ref"><span>Work order: replace unit</span><b>${code}</b></div>
         <div class="timer-bar"><div></div></div>
@@ -956,6 +970,8 @@ function verifyCheck(stage, op, done) {
         </div>
       </div>`;
     S.t0 = performance.now();
+    S.answer = opts.indexOf(code);
+    if (v3) v3.pump(LIMIT + 200);
     const bar = $('.timer-bar > div', stage);
     const tick = () => { const p = Math.min(1, (performance.now() - S.t0) / LIMIT); bar.style.width = `${(1 - p) * 100}%`; if (p < 1 && S.on) S.raf = requestAnimationFrame(tick); };
     tick();
@@ -964,6 +980,8 @@ function verifyCheck(stage, op, done) {
       if (!S.on || b.disabled) return;
       clearTimeout(S.timer); cancelAnimationFrame(S.raf);
       const ok = b.dataset.c === code;
+      S.pick = $$('.unit', stage).indexOf(b); S.ok = ok; S.pickAt = performance.now();
+      if (v3) v3.pump(ok ? 700 : 1500);
       S.times.push(performance.now() - S.t0);
       if (!ok) S.errors++;
       b.classList.add(ok ? 'right' : 'wrong');
@@ -982,9 +1000,10 @@ function verifyCheck(stage, op, done) {
       flags: { errors: S.errors },
     });
   }
-  stage.innerHTML = '<div class="sim-box seq-card rack"></div>';
+  stage.innerHTML = '<div class="sim-box seq-card rack"><div class="rack-view"></div><div class="rack-ui"></div></div>';
+  const v3 = window.Scene3D ? Scene3D.water($('.rack-view', stage), () => ({ trial: S.trial, pick: S.pick, ok: S.ok, pickAt: S.pickAt, answer: S.answer })) : null;   // 3D water rack
   overlay($('.sim-box', stage), `Open work orders (${TRIALS})`, () => { Object.assign(S, { trial: 0, errors: 0, timeouts: 0, times: [], on: true }); nextTrial(); });
-  return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); }, running: () => S.on, key: () => false };
+  return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); if (v3) v3.dispose(); }, running: () => S.on, key: () => false };
 }
 
 // ---------------------------------------------------------
@@ -1013,7 +1032,13 @@ function triageCheck(stage, op, done) {
       <div class="seq-status"><span class="d-n">Alarm 0 / ${N}</span><span class="d-err">Wrong module 0 · Wrong response 0</span></div>
     </div>`;
   const box = $('.drill', stage), alarmEl = $('.alarm', stage);
-  const S = { n: 0, cur: null, found: false, t0: 0, times: [], wrongModule: 0, wrongResp: 0, timeouts: 0, timer: 0, raf: 0, on: false };
+  const S = { n: 0, cur: null, found: false, t0: 0, times: [], wrongModule: 0, wrongResp: 0, timeouts: 0, timer: 0, raf: 0, on: false, last: null };
+  const drillState = () => {
+    const mods = {};
+    $$('.mod', stage).forEach((b) => { mods[b.dataset.m] = { hit: b.classList.contains('hit'), miss: b.classList.contains('miss') }; });
+    return { alarm: S.cur ? { type: S.cur.alarm.type, mod: S.cur.mod.id } : null, reveal: S.found, mods, last: S.last };
+  };
+  const v3 = window.Scene3D ? Scene3D.drill($('.iss-map', stage), drillState) : null;   // 3D station schematic
   const status = () => {
     $('.d-n', stage).textContent = `Alarm ${Math.min(S.n, N)} / ${N}`;
     $('.d-err', stage).textContent = `Wrong module ${S.wrongModule} · Wrong response ${S.wrongResp}`;
@@ -1034,6 +1059,7 @@ function triageCheck(stage, op, done) {
       $('.alarm-type', stage).textContent = S.cur.alarm.label;
       $('.alarm-mod', stage).textContent = S.cur.mod.name;
       S.t0 = performance.now();
+      if (v3) v3.pump(LIMIT + 300);
       const bar = $('.timer-bar > div', stage);
       const tick = () => { const p = Math.min(1, (performance.now() - S.t0) / LIMIT); bar.style.width = `${(1 - p) * 100}%`; if (p < 1 && S.on) S.raf = requestAnimationFrame(tick); };
       tick();
@@ -1044,9 +1070,11 @@ function triageCheck(stage, op, done) {
     if (!S.on || !S.cur || S.found) return;
     if (b.dataset.m === S.cur.mod.id) {
       S.found = true; b.classList.add('hit');
+      if (v3) v3.pump(1500);
       $$('.resp', stage).forEach((r) => { r.disabled = false; });
     } else {
       S.wrongModule++; status();
+      if (v3) v3.pump(600);
       b.classList.remove('miss'); void b.offsetWidth; b.classList.add('miss');
     }
   }
@@ -1054,6 +1082,8 @@ function triageCheck(stage, op, done) {
     if (!S.on || !S.cur || !S.found) return;
     if (b.dataset.r === S.cur.alarm.resp) {
       S.times.push(performance.now() - S.t0);
+      S.last = { resp: b.dataset.r, mod: S.cur.mod.id, at: performance.now() };
+      if (v3) v3.pump(1300);
       S.cur = null;
       toast('Correct first response');
       nextAlarm();
@@ -1077,7 +1107,7 @@ function triageCheck(stage, op, done) {
   overlay(box, 'Start the drill (6 alarms)', () => { Object.assign(S, { n: 0, times: [], wrongModule: 0, wrongResp: 0, timeouts: 0, on: true }); status(); nextAlarm(); });
   $$('.mod', stage).forEach((b) => b.addEventListener('click', () => clickModule(b)));
   $$('.resp', stage).forEach((b) => b.addEventListener('click', () => clickResp(b)));
-  return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); }, running: () => S.on, key: () => false };
+  return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); if (v3) v3.dispose(); }, running: () => S.on, key: () => false };
 }
 
 // ---------------------------------------------------------
@@ -1106,6 +1136,9 @@ function pursuitCheck(stage, op, done) {
   const box = $('.us-screen', stage), ves = $('.us-vessel', stage), probe = $('.us-probe', stage), cmd = $('.cmd', stage);
   const S = { t0: 0, x: 0.5, y: 0.5, vx: 0.5, vy: 0.5, p1: 0, p2: 0, q: 0, cmd: 'hold', on: 0, total: 0, saved: 0, early: 0, lost: 0, keys: {}, usePointer: false };
   const setCmd = (k) => { S.cmd = k; cmd.textContent = k === 'hold' ? 'WAIT' : 'SAVE'; cmd.className = `cmd ${k}`; };
+  const V = { x: 0.5, y: 0.5, vx: 0.5, vy: 0.5, q: 0, onT: false };
+  const usState = () => Object.assign(V, { x: S.x, y: S.y, vx: S.vx, vy: S.vy, q: S.q });
+  const v3 = window.Scene3D ? Scene3D.ultrasound(box, usState) : null;   // 3D probe on skin + echo inset
   const L = loop((now, dt) => {
     const t = (now - S.t0) / 1000;
     S.vx = 0.5 + 0.28 * Math.sin(0.41 * t + S.p1) + 0.07 * Math.sin(1.37 * t + S.p2);
@@ -1123,6 +1156,7 @@ function pursuitCheck(stage, op, done) {
     ves.style.left = `${S.vx * 100}%`; ves.style.top = `${S.vy * 100}%`;
     probe.style.left = `${S.x * 100}%`; probe.style.top = `${S.y * 100}%`;
     probe.classList.toggle('on', onT);
+    if (v3 && v3.ready) { usState(); V.onT = onT; v3.frame(V, now); }
     $('.meter > div', stage).style.width = `${S.q * 100}%`;
     $('.u-on', stage).textContent = `On target ${Math.round((S.on / Math.max(0.01, S.total)) * 100)}%`;
     const left = LIMIT - (now - S.t0);
@@ -1163,7 +1197,7 @@ function pursuitCheck(stage, op, done) {
   });
   const KEYMAP = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
   return {
-    stop: () => L.stop(), running: () => L.on,
+    stop: () => { L.stop(); if (v3) v3.dispose(); }, running: () => L.on,
     key(e, down) {
       if (KEYMAP[e.key]) { S.keys[KEYMAP[e.key]] = down; if (down) S.usePointer = false; return L.on; }
       if (down && e.code === 'Space' && L.on) { if (!e.repeat) save(); return true; }
@@ -1185,8 +1219,8 @@ function trayCheck(stage, op, done) {
     return [...set];
   };
   function render(showCodes) {
-    stage.innerHTML = `
-      <div class="sim-box seq-card glovebox">
+    $('.tray-ui', stage).innerHTML = `
+      <div class="tray-ui-in">
         <div class="seq-status"><span>Tray ${S.round + 1} of ${ROUNDS}</span><span class="tr-phase"></span><span>Correct ${S.correct} · Wrong ${S.errors}</span></div>
         <div class="record"><span class="label">Experiment record</span><b class="tr-ask">Study the tray</b></div>
         <div class="timer-bar"><div></div></div>
@@ -1197,6 +1231,7 @@ function trayCheck(stage, op, done) {
         </div>
       </div>`;
     $$('.slot', stage).forEach((b) => b.addEventListener('click', () => answer(b)));
+    if (v3) v3.pump(9000);
   }
   const runTimer = (ms, onEnd) => {
     S.t0 = performance.now();
@@ -1224,6 +1259,7 @@ function trayCheck(stage, op, done) {
     $$('.slot', stage).forEach((b) => { b.disabled = false; });
     $('.tr-phase', stage).textContent = `Sample ${S.ask + 1} of ${PER}`;
     $('.tr-ask', stage).textContent = `Transfer SMP-${S.codes[S.asks[S.ask]]}`;
+    if (v3) v3.pump(LIMIT + 300);
     runTimer(LIMIT, () => { S.timeouts++; S.errors++; reveal(null); });
   }
   function reveal(clicked) {
@@ -1234,6 +1270,7 @@ function trayCheck(stage, op, done) {
     if (clicked && clicked !== tb) { clicked.classList.add('open', 'wrong'); $('.vial', clicked).textContent = `SMP-${S.codes[+clicked.dataset.i]}`; }
     $$('.slot', stage).forEach((b) => { b.disabled = true; });
     S.ask++;
+    if (v3) v3.pump(2500);
     S.timer = setTimeout(() => {
       $$('.slot', stage).forEach((b) => { b.classList.remove('open', 'right', 'wrong'); $('.vial', b).textContent = ''; });
       nextAsk();
@@ -1255,9 +1292,14 @@ function trayCheck(stage, op, done) {
       flags: { errors: S.errors },
     });
   }
-  stage.innerHTML = '<div class="sim-box seq-card glovebox"></div>';
+  stage.innerHTML = '<div class="sim-box seq-card glovebox"><div class="tray-view"></div><div class="tray-ui"></div></div>';
+  const trayState = () => ({
+    phase: S.phase, round: S.round, codes: S.codes,
+    slots: $$('.slot', stage).map((b) => ({ open: b.classList.contains('open'), right: b.classList.contains('right'), wrong: b.classList.contains('wrong') })),
+  });
+  const v3 = window.Scene3D ? Scene3D.glovebox($('.tray-view', stage), trayState) : null;   // 3D glovebox + sample tray
   overlay($('.sim-box', stage), 'Open the sample tray', () => { Object.assign(S, { round: 0, correct: 0, errors: 0, timeouts: 0, times: [], on: true }); startRound(); }, 'You will have 6 seconds to memorise 12 samples.');
-  return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); }, running: () => S.on, key: () => false };
+  return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); if (v3) v3.dispose(); }, running: () => S.on, key: () => false };
 }
 
 const CHECKS = { capture: captureCheck, monitor: monitorCheck, torque: torqueCheck, verify: verifyCheck, triage: triageCheck, pursuit: pursuitCheck, tray: trayCheck };
