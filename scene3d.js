@@ -33,6 +33,8 @@
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.3;
+    renderer.shadowMap.enabled = true;                 // only scenes with castShadow lights pay for it
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     const pmrem = new THREE.PMREMGenerator(renderer);
     const env = pmrem.fromScene(new L.RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
@@ -462,306 +464,595 @@
   }
 
   // ---------------------------------------------------------
-  // 5. Emergency drill — 3D station schematic (procedural modules, real ISS order).
-  //    The module buttons are placed over the 3D modules; the alarmed module
-  //    pulses in the alarm colour; a correct first response flies the
-  //    equipment (PFE for fire, mask, or hatch) into the module.
+  // Procedural textures shared by the detailed scenes
+  // ---------------------------------------------------------
+  function canvasTex(THREE, w, h, draw, srgb = true) {
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    draw(c.getContext('2d'), w, h);
+    const t = new THREE.CanvasTexture(c);
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    return t;
+  }
+  const noise = (g, w, h, n, rgb, a) => { for (let i = 0; i < n; i++) { g.fillStyle = `rgba(${rgb},${Math.random() * a})`; g.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 2, 1 + Math.random() * 2); } };
+  // quilted MLI / MMOD shield panels of a pressurised module (u = around, v = along)
+  function moduleSkin(THREE, kind) {
+    return canvasTex(THREE, 512, 256, (g, w, h) => {
+      const base = kind === 'ros' ? '#e6e3da' : kind === 'node' ? '#ece9e1' : '#efe9dc';
+      g.fillStyle = base; g.fillRect(0, 0, w, h);
+      const cols = kind === 'ros' ? 10 : 12, rows = kind === 'node' ? 3 : 5;
+      for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
+        const x = (i * w) / cols, y = (j * h) / rows, pw = w / cols, ph = h / rows;
+        const shade = 225 + Math.floor(Math.random() * 22);
+        g.fillStyle = `rgb(${shade},${shade - 3},${shade - 12})`;
+        g.fillRect(x + 2, y + 2, pw - 4, ph - 4);
+        g.strokeStyle = 'rgba(120,112,98,.55)'; g.lineWidth = 2; g.strokeRect(x + 2, y + 2, pw - 4, ph - 4);
+        // quilting stitches
+        g.strokeStyle = 'rgba(150,140,120,.25)'; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(x + pw / 2, y + 4); g.lineTo(x + pw / 2, y + ph - 4); g.stroke();
+      }
+      if (kind === 'ros') { g.fillStyle = 'rgba(60,66,78,.75)'; g.fillRect(0, h * 0.46, w, h * 0.08); }
+      // yellow handrails
+      g.fillStyle = '#d8a227';
+      [0.12, 0.62].forEach((u) => g.fillRect(u * w, 10, 6, h - 20));
+      noise(g, w, h, 3000, '90,80,60', 0.12);
+    });
+  }
+  function solarTex(THREE) {
+    return canvasTex(THREE, 128, 512, (g, w, h) => {
+      g.fillStyle = '#5a3b12'; g.fillRect(0, 0, w, h);
+      for (let y = 0; y < h; y += 16) for (let x = 0; x < w; x += 16) {
+        const v = 80 + Math.random() * 40;
+        g.fillStyle = `rgb(${v + 70},${v + 30},${v - 50})`; g.fillRect(x + 1, y + 1, 14, 14);
+      }
+      g.fillStyle = 'rgba(30,20,10,.8)'; for (let y = 0; y < h; y += 128) g.fillRect(0, y, w, 4);
+    });
+  }
+  function latticeTex(THREE) {
+    return canvasTex(THREE, 512, 64, (g, w, h) => {
+      g.clearRect(0, 0, w, h);
+      g.strokeStyle = '#c7ccd6'; g.lineWidth = 5;
+      g.strokeRect(2, 2, w - 4, h - 4);
+      for (let x = 0; x < w; x += 64) { g.beginPath(); g.moveTo(x, 2); g.lineTo(x + 64, h - 2); g.moveTo(x + 64, 2); g.lineTo(x, h - 2); g.stroke(); g.fillStyle = '#c7ccd6'; g.fillRect(x, 0, 5, h); }
+    });
+  }
+
+  // ---------------------------------------------------------
+  // 5. Emergency drill — detailed ISS in orbit (procedural, real module order).
+  //    Every alarm flies the camera to a new viewpoint. Module and hatch
+  //    buttons are DOM overlays kept on their 3D positions.
   // ---------------------------------------------------------
   const STATION = {
-    // id: [x, y, length, radius, kind]
+    // id: [x, y, length, radius, kind, axis]
     kibo: [-4.4, 0, 2.2, 0.62, 'lab'], node2: [-2.5, 0, 1.0, 0.6, 'node'], lab: [-0.9, 0, 1.9, 0.58, 'lab'],
     node1: [0.75, 0, 1.0, 0.6, 'node'], zarya: [2.5, 0, 2.0, 0.52, 'ros'], zvezda: [4.6, 0, 1.9, 0.5, 'ros'],
     columbus: [-2.5, 1.65, 1.5, 0.58, 'lab', 'y'], node3: [0.75, -1.6, 1.4, 0.58, 'node', 'y'],
   };
+  const HATCH_EDGES = [['kibo', 'node2'], ['columbus', 'node2'], ['node2', 'lab'], ['lab', 'node1'], ['node1', 'node3'], ['node1', 'zarya'], ['zarya', 'zvezda']];
   const ALARM_COLOR = { fire: 0xfc3d21, tox: 0xffb020, dep: 0xb98cff };
   function drill(box, getState) {
     return mountView(box, 'assets/models/pfe.glb', getState, (THREE, scene, camera, model, host) => {
-      const own = [];
-      scene.background = new THREE.Color(0x060a14);
-      const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(3, 6, 6); scene.add(key);
-      scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x101828, 0.9));
-      camera.fov = 34; camera.updateProjectionMatrix();
-      camera.position.set(0.2, 4.6, 8.4); camera.lookAt(0.1, -0.1, 0);
+      const bg = orbitBackdrop(THREE, scene);
+      const own = [...bg.own];
+      scene.background = new THREE.Color(0x02040a);
+      camera.fov = 34; camera.near = 0.1; camera.far = 600; camera.updateProjectionMatrix();
+      const center = new THREE.Vector3(0.1, 0, 0);
+      const station = new THREE.Group(); scene.add(station);
 
+      const skins = { lab: moduleSkin(THREE, 'lab'), node: moduleSkin(THREE, 'node'), ros: moduleSkin(THREE, 'ros') };
+      own.push(...Object.values(skins));
       const geoCache = {};
-      const cyl = (len, r) => geoCache[`${len}_${r}`] || (geoCache[`${len}_${r}`] = new THREE.CylinderGeometry(r, r, len, 32, 1));
-      const ringGeo = new THREE.TorusGeometry(1, 0.04, 8, 40);
-      const truss = new THREE.Mesh(new THREE.BoxGeometry(11, 0.16, 0.16), new THREE.MeshStandardMaterial({ color: 0x5b6577, metalness: 0.6, roughness: 0.5 }));
-      truss.position.set(-0.3, 0, -1.6); scene.add(truss);
-      own.push(ringGeo, truss.geometry, truss.material);
+      const cyl = (len, r) => geoCache[`${len}_${r}`] || (geoCache[`${len}_${r}`] = new THREE.CylinderGeometry(r, r, len, 40, 1, false));
+      const endRingGeo = new THREE.TorusGeometry(1, 0.06, 10, 40);
+      const cbmGeo = new THREE.CylinderGeometry(1, 1, 0.08, 32);
+      const darkMetal = new THREE.MeshStandardMaterial({ color: 0x8a919e, metalness: 0.8, roughness: 0.35 });
+      const cbmMat = new THREE.MeshStandardMaterial({ color: 0x5d6472, metalness: 0.7, roughness: 0.4 });
+      const haloGeo = new THREE.TorusGeometry(1, 0.04, 8, 48);
+      own.push(endRingGeo, cbmGeo, darkMetal, cbmMat, haloGeo);
 
       const mods = {};
       Object.entries(STATION).forEach(([id, [x, y, len, r, kind, axis]]) => {
-        const mat = new THREE.MeshStandardMaterial({ color: kind === 'ros' ? 0xd9d2c0 : 0xe8ecf3, metalness: 0.25, roughness: 0.6, emissive: 0x000000 });
-        const m = new THREE.Mesh(cyl(len, r), mat);
-        if (axis === 'y') m.position.set(x, y, 0); else { m.rotation.z = Math.PI / 2; m.position.set(x, y, 0); }
-        scene.add(m);
-        const halo = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
-        halo.scale.setScalar(r * 1.35); halo.position.copy(m.position); halo.rotation.x = -Math.PI / 2 + 0.5; scene.add(halo);
+        const g = new THREE.Group(); g.position.set(x, y, 0);
+        if (axis !== 'y') g.rotation.z = Math.PI / 2;
+        const mat = new THREE.MeshStandardMaterial({ map: skins[kind], roughness: 0.72, metalness: 0.08 });
+        const body = new THREE.Mesh(cyl(len, r), mat); g.add(body);
+        // end rings + berthing mechanisms
+        [-1, 1].forEach((s) => {
+          const ring = new THREE.Mesh(endRingGeo, darkMetal); ring.scale.set(r * 0.98, r * 0.98, r); ring.rotation.x = Math.PI / 2; ring.position.y = (s * len) / 2; g.add(ring);
+          const cbm = new THREE.Mesh(cbmGeo, cbmMat); cbm.scale.set(r * 0.62, 1, r * 0.62); cbm.position.y = (s * (len / 2 + 0.03)); g.add(cbm);
+        });
+        // mid-body stiffener rings on long modules
+        if (len > 1.4) [-0.25, 0.25].forEach((f) => { const ring = new THREE.Mesh(endRingGeo, darkMetal); ring.scale.set(r * 1.005, r * 1.005, r * 0.5); ring.rotation.x = Math.PI / 2; ring.position.y = f * len; g.add(ring); });
+        // nodes: radial berthing ports
+        if (kind === 'node') [0, Math.PI / 2, Math.PI, -Math.PI / 2].forEach((a) => {
+          const port = new THREE.Mesh(cbmGeo, cbmMat); port.scale.set(r * 0.42, 1.6, r * 0.42);
+          port.position.set(Math.cos(a) * r, 0, Math.sin(a) * r); port.rotation.z = Math.PI / 2; port.rotation.y = -a; g.add(port);
+        });
+        station.add(g);
+        const halo = new THREE.Mesh(haloGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
+        halo.scale.setScalar(r * 1.4); halo.position.copy(g.position); halo.rotation.x = -Math.PI / 2 + 0.5; station.add(halo);
         own.push(mat, halo.material);
-        mods[id] = { m, mat, halo, r };
+        mods[id] = { m: g, mat, halo, r, len, axis: axis === 'y' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0) };
       });
-      Object.values(geoCache).forEach((g) => own.push(g));
-      // Zvezda / Zarya solar wings, for recognisability
-      const wingGeo = new THREE.BoxGeometry(0.9, 0.02, 2.4);
-      const wingMat = new THREE.MeshStandardMaterial({ color: 0x1c3f8a, metalness: 0.4, roughness: 0.45, emissive: 0x081a40 });
-      own.push(wingGeo, wingMat);
+      Object.values(geoCache).forEach((gg) => own.push(gg));
+      // Kibo exposed facility, Columbus external platform
+      const efGeo = new THREE.BoxGeometry(1.2, 0.12, 0.9);
+      const ef = new THREE.Mesh(efGeo, darkMetal); ef.position.set(-6.1, 0, 0); station.add(ef);
+      own.push(efGeo);
+      // integrated truss (lattice) with solar array wings and radiators
+      const lat = latticeTex(THREE); lat.wrapS = THREE.RepeatWrapping; lat.repeat.set(6, 1);
+      const latMat = new THREE.MeshStandardMaterial({ map: lat, transparent: true, alphaTest: 0.4, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.4, color: 0xffffff });
+      const trussGeo = new THREE.BoxGeometry(12.5, 0.42, 0.42);
+      const truss = new THREE.Mesh(trussGeo, latMat); truss.position.set(-0.3, 0, -1.7); station.add(truss);
+      const strutGeo = new THREE.CylinderGeometry(0.05, 0.05, 1.2, 8);
+      const strut = new THREE.Mesh(strutGeo, darkMetal); strut.rotation.x = Math.PI / 2; strut.position.set(-0.9, 0, -1.05); station.add(strut);
+      const sTex = solarTex(THREE);
+      const solarMat = new THREE.MeshStandardMaterial({ map: sTex, metalness: 0.35, roughness: 0.4, side: THREE.DoubleSide, emissive: 0x1a0d00, emissiveIntensity: 0.4 });
+      const wingGeo = new THREE.PlaneGeometry(0.9, 4.6);
+      const mastGeo = new THREE.CylinderGeometry(0.03, 0.03, 9.6, 6);
+      own.push(lat, latMat, trussGeo, strutGeo, sTex, solarMat, wingGeo, mastGeo);
+      [-6.3, -5.2, 4.6, 5.7].forEach((x) => {
+        [1, -1].forEach((s) => { const w = new THREE.Mesh(wingGeo, solarMat); w.position.set(x, s * 2.55, -1.7); station.add(w); });
+        const mast = new THREE.Mesh(mastGeo, darkMetal); mast.position.set(x, 0, -1.69); station.add(mast);
+      });
+      const radMat = new THREE.MeshStandardMaterial({ color: 0xf4f6f9, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide });
+      const radGeo = new THREE.PlaneGeometry(0.7, 2.2);
+      own.push(radMat, radGeo);
+      [-1.6, 1.0].forEach((x) => { const rp = new THREE.Mesh(radGeo, radMat); rp.rotation.x = Math.PI / 2; rp.position.set(x, -0.25, -2.9); station.add(rp); });
+      // Russian segment wings
+      const rosWingGeo = new THREE.PlaneGeometry(0.75, 2.4);
+      const rosSolar = new THREE.MeshStandardMaterial({ color: 0x1c3f8a, metalness: 0.4, roughness: 0.4, emissive: 0x081a40, side: THREE.DoubleSide });
+      own.push(rosWingGeo, rosSolar);
       [['zvezda', 1], ['zvezda', -1], ['zarya', 1], ['zarya', -1]].forEach(([id, sgn]) => {
-        const w = new THREE.Mesh(wingGeo, wingMat); w.position.copy(mods[id].m.position).add(new THREE.Vector3(0, 0, sgn * 1.9)); scene.add(w);
+        const w = new THREE.Mesh(rosWingGeo, rosSolar); w.rotation.x = Math.PI / 2; w.position.copy(mods[id].m.position).add(new THREE.Vector3(0, 0, sgn * 1.75)); station.add(w);
       });
 
-      // Equipment that flies into the module on a correct first response
+      // Hatch rings at the junction of each pair of modules
+      const hatchGeo = new THREE.TorusGeometry(0.38, 0.055, 12, 48);
+      const hatchDiscGeo = new THREE.CircleGeometry(0.36, 36);
+      own.push(hatchGeo, hatchDiscGeo);
+      const ext = (md, dir) => (Math.abs(md.axis.dot(dir)) > 0.9 ? md.len / 2 : md.r);
+      const hatches = HATCH_EDGES.map(([a, b]) => {
+        const A = mods[a], B = mods[b];
+        const dir = B.m.position.clone().sub(A.m.position).normalize();
+        const pa = A.m.position.clone().addScaledVector(dir, ext(A, dir)), pb = B.m.position.clone().addScaledVector(dir, -ext(B, dir));
+        const pos = pa.add(pb).multiplyScalar(0.5);
+        const mat = new THREE.MeshBasicMaterial({ color: 0x8090a8, transparent: true, opacity: 0.0 });
+        const ring = new THREE.Mesh(hatchGeo, mat);
+        ring.position.copy(pos); ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+        const discMat = new THREE.MeshBasicMaterial({ color: 0x34d399, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
+        const disc = new THREE.Mesh(hatchDiscGeo, discMat); ring.add(disc);
+        station.add(ring); own.push(mat, discMat);
+        return { ring, mat, disc, pos };
+      });
+
+      // "You are here": a blue beacon
+      const youMat = new THREE.MeshBasicMaterial({ color: 0x6aa8ff });
+      const youGeo = new THREE.ConeGeometry(0.16, 0.42, 16);
+      const you = new THREE.Mesh(youGeo, youMat); you.visible = false; scene.add(you);
+      own.push(youMat, youGeo);
+
+      // Equipment that flies to the module on a correct first response
       const b = new THREE.Box3().setFromObject(model), size = b.getSize(new THREE.Vector3()), ctr = b.getCenter(new THREE.Vector3());
       model.scale.setScalar(0.9 / size.y); model.position.copy(ctr).multiplyScalar(-0.9 / size.y);
       const pfe = new THREE.Group(); pfe.add(model);
       const maskMat = new THREE.MeshStandardMaterial({ color: 0xf2c94c, roughness: 0.5 });
       const maskGeo = new THREE.SphereGeometry(0.28, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2);
       const mask = new THREE.Mesh(maskGeo, maskMat); mask.rotation.x = Math.PI / 2;
-      const hatchMat = new THREE.MeshStandardMaterial({ color: 0xb9c2d0, metalness: 0.8, roughness: 0.3 });
-      const hatchGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.06, 32);
-      const hatch = new THREE.Mesh(hatchGeo, hatchMat); hatch.rotation.x = Math.PI / 2;
-      own.push(maskMat, maskGeo, hatchMat, hatchGeo);
-      const kit = { ext: pfe, mask, hatch };
+      const plugMat = new THREE.MeshStandardMaterial({ color: 0xb9c2d0, metalness: 0.8, roughness: 0.3 });
+      const plugGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.06, 32);
+      const plug = new THREE.Mesh(plugGeo, plugMat); plug.rotation.x = Math.PI / 2;
+      own.push(maskMat, maskGeo, plugMat, plugGeo);
+      const kit = { ext: pfe, mask, hatch: plug };
       Object.values(kit).forEach((o) => { o.visible = false; scene.add(o); });
-      const kitHome = new THREE.Vector3(0, -2.6, 3.2);
 
-      // labels alternate above/below the chain so neighbours never overlap
+      const ease = (x) => (x >= 1 ? 1 : 1 - Math.pow(1 - x, 3));
+      const camUp = new THREE.Vector3(), tmp = new THREE.Vector3(), black = new THREE.Color(0x000000), down = new THREE.Vector3(0, -1, 0);
       const LABEL_SIDE = { kibo: 1, node2: -1, lab: 1, node1: -1, zarya: 1, zvezda: -1, columbus: 0, node3: 0 };
-      const place = () => {
-        const w = host.clientWidth, h = host.clientHeight;
+      const modBtns = {}, hatchBtns = [];
+      host.querySelectorAll('.mod').forEach((el) => { modBtns[el.dataset.m] = el; });
+      host.querySelectorAll('.hatch').forEach((el) => { hatchBtns[+el.dataset.h] = el; });
+      const setCam = (v, w, h) => {
         const halfTan = Math.tan((camera.fov * Math.PI) / 360);
-        const d = Math.max(7.2, 11.5 / (2 * halfTan * (w / h)));          // fit the whole station width
-        camera.position.set(0.2, d * 0.5, d * 0.88); camera.lookAt(0.1, -0.1, 0);
-        camera.updateMatrixWorld(true);
-        Object.entries(mods).forEach(([id, md]) => {
-          const btn = host.querySelector(`.mod[data-m="${id}"]`);
-          if (!btn) return;
-          const v = md.m.position.clone().project(camera);
-          const px = ((1 - v.y) / 2) * h + LABEL_SIDE[id] * (md.r / (2 * halfTan * d)) * h * 1.25;
-          btn.style.left = `${((v.x + 1) / 2) * w}px`; btn.style.top = `${px}px`;
-        });
+        const d = Math.max(8.2, 13.2 / (2 * halfTan * (w / h))) * v.dist;
+        camera.position.set(center.x + d * Math.sin(v.yaw) * Math.cos(v.pitch), center.y + d * Math.sin(v.pitch), center.z + d * Math.cos(v.yaw) * Math.cos(v.pitch));
+        camera.up.set(0, 1, 0); camera.lookAt(center); camera.updateMatrixWorld(true);
       };
-      let lastW = 0, lastH = 0;
-      const white = new THREE.Color(0x000000);
+      const toPx = (p, w, h) => { tmp.copy(p).project(camera); return [((tmp.x + 1) / 2) * w, ((1 - tmp.y) / 2) * h, tmp.z]; };
       return {
         own,
         frame(S, now) {
-          if (host.clientWidth !== lastW || host.clientHeight !== lastH) { lastW = host.clientWidth; lastH = host.clientHeight; place(); }
-          const t = now / 1000;
+          const w = host.clientWidth, h = host.clientHeight, t = now / 1000;
+          const k = S.viewFrom ? ease((now - S.viewAt) / 900) : 1;
+          const vf = S.viewFrom || S.view, vt = S.view;
+          setCam({ yaw: vf.yaw + (vt.yaw - vf.yaw) * k, pitch: vf.pitch + (vt.pitch - vf.pitch) * k, dist: vf.dist + (vt.dist - vf.dist) * k }, w, h);
+          camUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+          // labels: project, then push overlapping ones apart vertically (a few relaxation passes)
+          const lab = [];
           Object.entries(mods).forEach(([id, md]) => {
-            const st = S.mods[id] || {};
-            let col = null, k = 0;
-            if (st.hit) { col = 0x34d399; k = 0.6; }
-            else if (st.miss) { col = 0xff5c5c; k = 0.7; }
-            else if (S.alarm && S.alarm.mod === id && S.reveal) { col = ALARM_COLOR[S.alarm.type]; k = 0.35 + 0.35 * (Math.sin(t * 12) > 0 ? 1 : 0); }
-            if (col) { md.mat.emissive.setHex(col); md.mat.emissiveIntensity = k; } else md.mat.emissive.copy(white);
-            md.halo.material.opacity = col ? 0.25 + 0.5 * k : 0;
-            if (col) md.halo.material.color.setHex(col);
-            md.halo.scale.setScalar(md.r * (1.35 + (col ? 0.08 * Math.sin(t * 9) : 0)));
+            const el = modBtns[id]; if (!el) return;
+            tmp.copy(md.m.position).addScaledVector(camUp, LABEL_SIDE[id] * md.r * 1.4);
+            const [x, y] = toPx(tmp, w, h);
+            if (!el._w) { el._w = el.offsetWidth || 90; el._h = el.offsetHeight || 22; }
+            lab.push({ el, x, y });
           });
-          // equipment flight
+          for (let pass = 0; pass < 4; pass++) for (let i = 0; i < lab.length; i++) for (let j = i + 1; j < lab.length; j++) {
+            const A = lab[i], B = lab[j];
+            const ox = (A.el._w + B.el._w) / 2 + 4 - Math.abs(A.x - B.x), oy = (A.el._h + B.el._h) / 2 + 3 - Math.abs(A.y - B.y);
+            if (ox > 0 && oy > 0) { const s = A.y <= B.y ? -1 : 1; A.y += (s * oy) / 2; B.y -= (s * oy) / 2; }
+          }
+          lab.forEach((L) => { L.el.style.left = `${L.x}px`; L.el.style.top = `${Math.max(12, Math.min(h - 12, L.y))}px`; });
+          hatches.forEach((hc, i) => {
+            const el = hatchBtns[i]; if (!el) return;
+            const [x, y] = toPx(hc.pos, w, h);
+            el.style.left = `${x}px`; el.style.top = `${y}px`;
+            const st = (S.hatches && S.hatches[i]) || {};
+            const col = st.shut ? 0x34d399 : st.miss ? 0xff5c5c : 0xffffff;
+            hc.mat.color.setHex(col);
+            hc.mat.opacity = st.live || st.miss ? 0.7 + 0.3 * Math.sin(t * 8) : st.shut ? 1 : 0;
+            hc.ring.scale.setScalar(st.live ? 1 + 0.08 * Math.sin(t * 8) : 1);
+            hc.disc.material.opacity = st.shut ? 0.55 : 0;
+            hc.disc.material.color.setHex(col);
+          });
+          Object.entries(mods).forEach(([id, md]) => {
+            const st = (S.mods && S.mods[id]) || {};
+            let col = null, kk = 0;
+            if (st.miss) { col = 0xff5c5c; kk = 0.6; }
+            else if (S.alarm && S.alarm.mod === id && S.reveal) { col = ALARM_COLOR[S.alarm.type]; kk = 0.3 + 0.3 * (Math.sin(t * 12) > 0 ? 1 : 0); }
+            if (col) { md.mat.emissive.setHex(col); md.mat.emissiveIntensity = kk; } else md.mat.emissive.copy(black);
+            md.halo.material.opacity = col ? 0.25 + 0.5 * kk : 0;
+            if (col) md.halo.material.color.setHex(col);
+          });
+          you.visible = !!S.you;
+          if (S.you) {
+            const md = mods[S.you];
+            you.position.copy(md.m.position).addScaledVector(camUp, md.r + 0.5 + 0.06 * Math.sin(t * 4));
+            tmp.copy(camUp).negate(); you.quaternion.setFromUnitVectors(down, tmp);
+          }
           Object.entries(kit).forEach(([rid, o]) => {
             const L = S.last;
             const active = L && L.resp === rid && now - L.at < 1100;
             o.visible = !!active;
             if (!active) return;
             const p = Math.min(1, (now - L.at) / 650), e = 1 - Math.pow(1 - p, 3);
-            const target = mods[L.mod].m.position;
-            o.position.lerpVectors(kitHome, target, e);
+            tmp.copy(camera.position).lerp(center, 0.35);
+            o.position.lerpVectors(tmp, mods[L.mod].m.position, e);
             o.rotation.y = t * 3;
             o.scale.setScalar(p < 1 ? 1 : Math.max(0.01, 1 - (now - L.at - 650) / 450));
           });
-          // the alarm itself: the whole view pulses, the module is only lit once found
-          const pulse = S.alarm && !S.reveal ? (Math.sin(t * 12) > 0 ? 1 : 0) : 0;
-          scene.background.setHex(pulse ? 0x2a0b10 : 0x060a14);
+          const pulse = S.alarm && S.step === 'module' ? (Math.sin(t * 12) > 0 ? 1 : 0) : 0;
+          scene.background.setHex(pulse ? 0x24070c : 0x02040a);
+          bg.stars.rotation.y = t * 0.003;
         },
       };
     });
   }
 
   // ---------------------------------------------------------
-  // 6. Ultrasound — top-down (orthographic, so mouse ↔ probe is exact):
-  //    gel-covered skin, the artery section moving under it, the probe model
-  //    on the skin, and an inset echo image that sharpens as quality fills.
+  // 6. Ultrasound — top-down orthographic (mouse ↔ probe exact) over a curved,
+  //    gel-coated neck. Artery + compressible vein under the skin, the marked
+  //    site, the probe with its footprint, and a B-mode echo image.
   // ---------------------------------------------------------
   function ultrasound(box, getState) {
     return mountView(box, 'assets/models/probe.glb', getState, (THREE, scene, _cam, model, host) => {
       const own = [];
-      scene.background = new THREE.Color(0x120c0c);
+      scene.background = new THREE.Color(0x0d0a0a);
       const cam = new THREE.OrthographicCamera(-1, 1, 0.5, -0.5, 0.1, 50);
       cam.up.set(0, 0, -1); cam.position.set(0, 10, 0); cam.lookAt(0, 0, 0);
-      const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(-2, 6, 3); scene.add(key);
-      scene.add(new THREE.HemisphereLight(0xfff1e6, 0x6a4a40, 1.6));
+      const key = new THREE.DirectionalLight(0xfff4ea, 2.4); key.position.set(-1.5, 5, -2); scene.add(key);
+      const rim = new THREE.DirectionalLight(0xcfe0ff, 0.8); rim.position.set(2, 3, 3); scene.add(rim);
+      scene.add(new THREE.HemisphereLight(0xfff1e6, 0x8a5a48, 1.0));
 
-      // skin with gel sheen (procedural texture), slightly translucent so the artery shows through
-      const c = document.createElement('canvas'); c.width = c.height = 256;
-      const g = c.getContext('2d');
-      const grd = g.createRadialGradient(128, 128, 20, 128, 128, 180); grd.addColorStop(0, '#f3cdb6'); grd.addColorStop(1, '#d19e86');
-      g.fillStyle = grd; g.fillRect(0, 0, 256, 256);
-      for (let i = 0; i < 2600; i++) { g.fillStyle = `rgba(${90 + Math.random() * 60},${50 + Math.random() * 30},40,${Math.random() * 0.08})`; g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2); }
-      const skinTex = new THREE.CanvasTexture(c); skinTex.colorSpace = THREE.SRGBColorSpace;
-      const skinMat = new THREE.MeshStandardMaterial({ map: skinTex, roughness: 0.35, metalness: 0, transparent: true, opacity: 0.72, emissive: 0x3a2018, emissiveIntensity: 0.6 });
-      const skinGeo = new THREE.PlaneGeometry(1, 1);
+      const CURV = 0.16;                                          // neck curvature across the screen
+      const hAt = (xn) => -CURV * (2 * xn) * (2 * xn);              // surface height at normalised x ∈ [-0.5, 0.5]
+      const skinTex = canvasTex(THREE, 512, 512, (g, w, h) => {
+        const grd = g.createLinearGradient(0, 0, w, 0);
+        grd.addColorStop(0, '#b4705a'); grd.addColorStop(0.5, '#e9b394'); grd.addColorStop(1, '#b4705a');
+        g.fillStyle = grd; g.fillRect(0, 0, w, h);
+        noise(g, w, h, 9000, '120,70,55', 0.07);
+        for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(90,50,40,${Math.random() * 0.12})`; g.beginPath(); g.arc(Math.random() * w, Math.random() * h, 0.8, 0, 7); g.fill(); }  // pores
+        g.strokeStyle = 'rgba(150,100,85,.18)'; g.lineWidth = 1.5;                                  // skin creases
+        for (let i = 0; i < 7; i++) { const y = 60 + i * 65 + Math.random() * 20; g.beginPath(); g.moveTo(0, y); g.bezierCurveTo(w * 0.3, y + 12, w * 0.7, y - 12, w, y + 4); g.stroke(); }
+      });
+      const skinMat = new THREE.MeshPhysicalMaterial({ map: skinTex, roughness: 0.6, clearcoat: 0.7, clearcoatRoughness: 0.25, transparent: true, opacity: 0.9 });
+      const skinGeo = new THREE.PlaneGeometry(1, 1, 64, 4);
+      const pos = skinGeo.attributes.position;
+      for (let i = 0; i < pos.count; i++) pos.setZ(i, hAt(pos.getX(i)));
+      skinGeo.computeVertexNormals();
       const skin = new THREE.Mesh(skinGeo, skinMat); skin.rotation.x = -Math.PI / 2; scene.add(skin);
       own.push(skinTex, skinMat, skinGeo);
 
-      // artery: a long faint vessel plus the bright target section that moves
-      const vesMat = new THREE.MeshStandardMaterial({ color: 0x8e1b23, roughness: 0.4, emissive: 0x3a0508 });
-      const tubeGeo = new THREE.CylinderGeometry(0.035, 0.035, 2, 20);
-      const tube = new THREE.Mesh(tubeGeo, vesMat); tube.rotation.x = Math.PI / 2; tube.position.y = -0.06; scene.add(tube);
-      const secGeo = new THREE.SphereGeometry(0.07, 24, 16);
-      const sec = new THREE.Mesh(secGeo, new THREE.MeshStandardMaterial({ color: 0xc8283a, emissive: 0x5a0a12, roughness: 0.3 }));
-      sec.scale.set(1.4, 0.5, 0.8); sec.position.y = -0.05; scene.add(sec);
-      own.push(vesMat, tubeGeo, secGeo, sec.material);
+      const vessels = new THREE.Group(); scene.add(vessels);
+      const artMat = new THREE.MeshStandardMaterial({ color: 0xb02633, emissive: 0x3a0610, roughness: 0.35 });
+      const veinMat = new THREE.MeshStandardMaterial({ color: 0x3a5cb8, emissive: 0x0a1844, roughness: 0.35 });
+      own.push(artMat, veinMat);
+      let art = null, vein = null, builtFor = null, builtAsp = 0;
+      const build = (ph, a) => {
+        [art, vein].forEach((m) => { if (m) { vessels.remove(m); m.geometry.dispose(); } });
+        const pts = (dx, depth) => Array.from({ length: 26 }, (_, i) => {
+          const y = -0.05 + i * 1.1 / 25, xn = 0.17 * Math.sin(2.3 * y + ph) + dx;
+          return new THREE.Vector3(xn * a, hAt(xn) - depth, y - 0.5);
+        });
+        art = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts(0, 0.07)), 90, 0.03, 16), artMat);
+        vein = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts(0.065, 0.05)), 90, 0.038, 16), veinMat);
+        vessels.add(art, vein);
+      };
+      // marked site
+      const siteGeo = new THREE.RingGeometry(0.05, 0.058, 48);
+      const siteMat = new THREE.MeshBasicMaterial({ color: 0x5fe3ff, transparent: true, opacity: 0.9, depthTest: false });
+      const site = new THREE.Mesh(siteGeo, siteMat); site.rotation.x = -Math.PI / 2; site.renderOrder = 3; scene.add(site);
+      const crossGeo = new THREE.PlaneGeometry(0.014, 0.14);
+      const cross1 = new THREE.Mesh(crossGeo, siteMat), cross2 = new THREE.Mesh(crossGeo, siteMat);
+      cross1.rotation.x = -Math.PI / 2; cross2.rotation.set(-Math.PI / 2, 0, Math.PI / 2); cross1.renderOrder = cross2.renderOrder = 3;
+      cross1.material = cross2.material = new THREE.MeshBasicMaterial({ color: 0x5fe3ff, transparent: true, opacity: 0.35, depthTest: false });
+      scene.add(cross1, cross2);
+      own.push(siteGeo, siteMat, crossGeo, cross1.material);
 
-      // probe (Higgsfield model), tip on the skin, handle leaning to the lower right
+      // probe with gel blob, footprint and a soft contact shadow
       const b = new THREE.Box3().setFromObject(model), size = b.getSize(new THREE.Vector3()), ctr = b.getCenter(new THREE.Vector3());
-      const s = 0.42 / Math.max(size.x, size.y, size.z);
+      const s = 0.4 / Math.max(size.x, size.y, size.z);
       model.scale.setScalar(s); model.position.copy(ctr).multiplyScalar(-s);
-      const tip = new THREE.Group(); tip.add(model);
-      model.position.z -= 0.21;                                   // pivot at the scanning face (+Z end)
-      tip.rotation.set(Math.PI / 2 - 0.9, 0, -0.5);               // face down, leaning back towards the viewer
+      model.position.z -= 0.2;
+      const tip = new THREE.Group(); tip.add(model); tip.rotation.set(Math.PI / 2 - 0.55, 0, 0);
       const probe = new THREE.Group(); probe.add(tip); scene.add(probe);
-      // contact ring: colour = on target, arc = image quality
-      const ringGeo = new THREE.RingGeometry(0.075, 0.09, 48);
-      const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd54a, transparent: true, opacity: 0.9, depthTest: false });
-      const ring = new THREE.Mesh(ringGeo, ringMat); ring.rotation.x = -Math.PI / 2; ring.position.y = 0.01; ring.renderOrder = 2; probe.add(ring);
-      const shadowGeo = new THREE.CircleGeometry(0.12, 32);
-      const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25, depthWrite: false });
-      const shadow = new THREE.Mesh(shadowGeo, shadowMat); shadow.rotation.x = -Math.PI / 2; shadow.position.set(0.05, 0.005, 0.06); probe.add(shadow);
-      own.push(ringGeo, ringMat, shadowGeo, shadowMat);
+      const shadowTex = canvasTex(THREE, 128, 128, (g, w, h) => { const r = g.createRadialGradient(64, 64, 4, 64, 64, 62); r.addColorStop(0, 'rgba(0,0,0,.55)'); r.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = r; g.fillRect(0, 0, w, h); }, false);
+      const shadowMat = new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false, depthTest: false });
+      const shadowGeo = new THREE.PlaneGeometry(0.34, 0.26);
+      const shadow = new THREE.Mesh(shadowGeo, shadowMat); shadow.rotation.x = -Math.PI / 2; shadow.position.set(0.05, 0.02, 0.07); shadow.renderOrder = 2; probe.add(shadow);
+      const gelMat = new THREE.MeshPhysicalMaterial({ color: 0xd8f0ff, transparent: true, opacity: 0.35, roughness: 0.05, clearcoat: 1, depthWrite: false });
+      const gelGeo = new THREE.SphereGeometry(0.11, 24, 12);
+      const gel = new THREE.Mesh(gelGeo, gelMat); gel.visible = false;
+      const footGeo = new THREE.PlaneGeometry(0.17, 0.032);
+      const footMat = new THREE.MeshBasicMaterial({ color: 0xffd54a, transparent: true, opacity: 0.9, depthTest: false });
+      const foot = new THREE.Mesh(footGeo, footMat); foot.rotation.x = -Math.PI / 2; foot.position.y = 0.03; foot.renderOrder = 4; probe.add(foot);
+      own.push(shadowTex, shadowMat, shadowGeo, gelMat, gelGeo, footGeo, footMat);
 
-      // inset echo image (2D canvas): the vessel appears where it is relative to the probe
-      const inset = document.createElement('canvas'); inset.className = 'us-inset'; inset.width = 220; inset.height = 150;
+      // B-mode echo image (2D canvas): sector, tissue layers, vessels cut by the probe plane
+      const inset = document.createElement('canvas'); inset.className = 'us-inset'; inset.width = 260; inset.height = 190;
       host.appendChild(inset);
       const ig = inset.getContext('2d');
-      const speck = document.createElement('canvas'); speck.width = 220; speck.height = 150;
-      const sg = speck.getContext('2d');
-      for (let i = 0; i < 5000; i++) { const v = 40 + Math.random() * 120; sg.fillStyle = `rgba(${v},${v},${v},${Math.random() * 0.5})`; sg.fillRect(Math.random() * 220, Math.random() * 150, 1.5, 1.5); }
-      const drawInset = (S, onT) => {
-        ig.clearRect(0, 0, 220, 150);
+      const W = 260, H = 190, AX = W / 2, AY = 14;
+      const tissue = document.createElement('canvas'); tissue.width = W; tissue.height = H;
+      (() => {
+        const tg = tissue.getContext('2d');
+        tg.fillStyle = '#050505'; tg.fillRect(0, 0, W, H);
+        for (let y = 0; y < H; y++) {
+          const layer = y < 28 ? 0.75 : y < 40 ? 0.35 : y < 120 ? 0.42 : 0.3;                      // skin, fat, muscle, deep
+          for (let x = 0; x < W; x += 2) { const v = Math.random() * 180 * layer; tg.fillStyle = `rgba(${v},${v},${v},${0.5 + Math.random() * 0.5})`; tg.fillRect(x, y, 2, 1); }
+        }
+        tg.fillStyle = 'rgba(230,230,230,.35)'; tg.fillRect(0, 38, W, 2); tg.fillRect(0, 124, W, 2);   // fascia lines
+      })();
+      const clamp01 = (v) => Math.max(0, Math.min(1, v));
+      const drawEcho = (S, asp, t) => {
+        ig.clearRect(0, 0, W, H);
+        ig.fillStyle = '#000'; ig.fillRect(0, 0, W, H);
         ig.save();
-        ig.beginPath(); ig.moveTo(110, 4); ig.lineTo(214, 146); ig.lineTo(6, 146); ig.closePath(); ig.clip();
-        ig.fillStyle = '#050505'; ig.fillRect(0, 0, 220, 150);
-        ig.globalAlpha = 0.35 + 0.65 * S.q; ig.drawImage(speck, 0, 0); ig.globalAlpha = 1;
-        const asp = host.clientWidth / Math.max(1, host.clientHeight);
-        const ix = 110 + (S.vx - S.x) * asp * 260, iy = 80 + (S.vy - S.y) * 200;
-        ig.fillStyle = '#000'; ig.strokeStyle = `rgba(235,235,235,${0.3 + 0.6 * S.q})`; ig.lineWidth = 3;
-        ig.beginPath(); ig.ellipse(ix, iy, 24, 14, 0, 0, Math.PI * 2); ig.fill(); ig.stroke();
+        ig.beginPath(); ig.moveTo(AX - 56, AY); ig.lineTo(AX + 56, AY); ig.lineTo(W - 8, H - 26); ig.quadraticCurveTo(AX, H + 6, 8, H - 26); ig.closePath(); ig.clip();
+        const contact = clamp01((S.p - 0.15) / 0.2);
+        ig.globalAlpha = 0.1 + 0.9 * contact * (0.5 + 0.5 * S.q); ig.drawImage(tissue, 0, 0); ig.globalAlpha = 1;
+        const ux = Math.cos(S.ang), uy = Math.sin(S.ang), nx = -uy, ny = ux;
+        const cross = Math.abs(Math.sin(S.ang - S.vdir));
+        const vessel = (vx, vy, depth, rr, squash, edge) => {
+          const dx = (vx - S.x) * asp, dy = vy - S.y;
+          const lat = dx * ux + dy * uy, elev = dx * nx + dy * ny;
+          const vis = clamp01(1 - Math.abs(elev) / 0.06) * contact;
+          if (vis <= 0.02) return;
+          const ex = AX + lat * 950, ey = depth;
+          const rx = Math.min(120, rr / Math.max(0.22, cross)), ry = Math.max(1.5, rr * squash);
+          ig.globalAlpha = vis;
+          const gr = ig.createRadialGradient(ex, ey, 1, ex, ey, Math.max(rx, ry));
+          gr.addColorStop(0, '#000'); gr.addColorStop(0.85, '#030303'); gr.addColorStop(1, '#111');
+          ig.fillStyle = gr; ig.strokeStyle = edge; ig.lineWidth = 3;
+          ig.beginPath(); ig.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2); ig.fill(); ig.stroke();
+          ig.globalAlpha = vis * 0.25; ig.fillStyle = '#ddd'; ig.fillRect(ex - rx, ey + ry + 2, rx * 2, 10);     // posterior enhancement
+          ig.globalAlpha = 1;
+        };
+        const beat = 1 + 0.12 * Math.max(0, Math.sin(t * 7.5));
+        const collapse = clamp01((S.p - 0.55) / 0.35);
+        vessel(S.vx + 0.065, S.vy, 70, 17, 0.85 * (1 - 0.9 * collapse), 'rgba(205,205,205,.6)');
+        vessel(S.vx, S.vy, 108, 14 * beat, 1, 'rgba(245,245,245,.9)');
         ig.restore();
-        ig.strokeStyle = onT ? '#34d399' : 'rgba(255,255,255,.35)'; ig.lineWidth = 2; ig.strokeRect(1, 1, 218, 148);
+        if (contact < 0.5) { ig.fillStyle = 'rgba(0,0,0,.55)'; ig.fillRect(0, 0, W, H); ig.fillStyle = '#ffb020'; ig.font = '600 13px Inter, sans-serif'; ig.textAlign = 'center'; ig.fillText('NO CONTACT · press', W / 2, H / 2); }
+        ig.fillStyle = 'rgba(255,255,255,.55)'; ig.font = '600 9px "JetBrains Mono", monospace'; ig.textAlign = 'left';
+        ig.fillText('L12-4  B-MODE', 8, 11); ig.textAlign = 'right'; ig.fillText(`D 4.0cm  G ${Math.round(40 + S.q * 20)}%`, W - 8, 11);
+        for (let i = 0; i <= 4; i++) ig.fillRect(4, AY + i * 40, 5, 1);
+        ig.strokeStyle = S.onT ? '#34d399' : 'rgba(255,255,255,.3)'; ig.lineWidth = 2; ig.strokeRect(1, 1, W - 2, H - 2);
       };
 
       let lastW = 0, lastH = 0;
       return {
         own, camera: cam,
         frame(S, now) {
-          const w = host.clientWidth, h = host.clientHeight;
+          const w = host.clientWidth, h = host.clientHeight, a = w / Math.max(1, h);
           if (w !== lastW || h !== lastH) {
             lastW = w; lastH = h;
-            const a = w / Math.max(1, h);
             cam.left = -a / 2; cam.right = a / 2; cam.top = 0.5; cam.bottom = -0.5; cam.updateProjectionMatrix();
             skin.scale.set(a, 1, 1);
           }
-          const a = w / Math.max(1, h), t = now / 1000;
-          const X = (v) => (v - 0.5) * a, Z = (v) => v - 0.5;
-          sec.position.x = X(S.vx); sec.position.z = Z(S.vy);
-          const beat = 1 + 0.12 * Math.max(0, Math.sin(t * 7.5));
-          sec.scale.set(1.4 * beat, 0.5, 0.8 * beat);
-          tube.position.x = sec.position.x; tube.position.z = sec.position.z;
-          tube.rotation.z = 0.25 * Math.sin(t * 0.3);
-          probe.position.set(X(S.x), 0, Z(S.y));
-          const onT = !!S.onT;
-          ringMat.color.setHex(onT ? 0x34d399 : 0xffd54a);
-          ring.scale.setScalar(1 + 0.6 * S.q);
-          drawInset(S, onT);
+          if (builtFor !== S.ph || builtAsp !== a) { build(S.ph, a); builtFor = S.ph; builtAsp = a; }
+          const t = (now - S.t0) / 1000;
+          vessels.position.x = 0.025 * Math.sin(t * 0.5) * a;
+          const collapse = clamp01((S.p - 0.55) / 0.35);
+          if (vein) vein.scale.y = 1 - 0.8 * collapse;
+          const sxn = S.vx - 0.5, pxn = S.x - 0.5;
+          site.position.set(sxn * a, hAt(sxn) + 0.02, S.vy - 0.5);
+          site.scale.setScalar(1 + 0.12 * Math.sin(now / 160));
+          cross1.position.copy(site.position); cross2.position.copy(site.position);
+          probe.position.set(pxn * a, hAt(pxn) - S.p * 0.03, S.y - 0.5);
+          probe.rotation.set(0, -S.ang, 0);
+          const cd = S.conds || {};
+          footMat.color.setHex(S.onT ? 0x34d399 : cd.angOk ? 0x6aa8ff : 0xffd54a);
+          shadowMat.opacity = 0.6 + 0.4 * S.p;
+          drawEcho(S, a, t);
         },
       };
     });
   }
 
   // ---------------------------------------------------------
-  // 7. Microgravity experiment — the glovebox with the 4×3 sample tray in front.
-  //    Codes stay in the DOM tray (that is what must be memorised); the 3D tray
-  //    shows the vials uncapped while studying, capped during recall, and lifts
-  //    out the vial you picked (green = right, red = wrong).
+  // 7. Microgravity Science Glovebox — detailed procedural work volume with
+  //    soft shadows, glass vials, a labelled rack (letters turn with it).
   // ---------------------------------------------------------
   const LIQUID = [0x3d7bff, 0x34d399, 0xffb020, 0xe0457b, 0x9b6bff, 0x2ec5d3];
   function glovebox(box, getState) {
-    return mountView(box, 'assets/models/glovebox.glb', getState, (THREE, scene, camera, model) => {
+    return mountView(box, null, getState, (THREE, scene, camera, _m, host) => {
       const own = [];
-      scene.background = new THREE.Color(0x0a111e);
-      const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(2, 6, 5); scene.add(key);
-      scene.add(new THREE.HemisphereLight(0xdfe9ff, 0x1a2333, 1.0));
-      camera.fov = 32; camera.updateProjectionMatrix();
+      scene.background = new THREE.Color(0xdfe5ee);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa4b6, 1.25));
+      const top = new THREE.DirectionalLight(0xffffff, 2.0); top.position.set(0.8, 6, 2.2);
+      top.castShadow = true; top.shadow.mapSize.set(1024, 1024); top.shadow.radius = 4;
+      Object.assign(top.shadow.camera, { left: -3, right: 3, top: 3, bottom: -3, near: 1, far: 12 }); top.shadow.bias = -0.0008;
+      scene.add(top);
+      const fill = new THREE.DirectionalLight(0xe8f0ff, 0.6); fill.position.set(-3, 2, 4); scene.add(fill);
+      camera.fov = 38; camera.updateProjectionMatrix();
 
-      const b = new THREE.Box3().setFromObject(model), size = b.getSize(new THREE.Vector3()), ctr = b.getCenter(new THREE.Vector3());
-      const s = 4.2 / Math.max(size.x, size.y, size.z);
-      model.scale.setScalar(s); model.position.copy(ctr).multiplyScalar(-s);
-      const gb = new THREE.Group(); gb.add(model); gb.rotation.set(...GLOVEBOX_ROT); scene.add(gb);
-      gb.updateMatrixWorld(true);
-      const wb = new THREE.Box3().setFromObject(gb);
+      const W = 5.2, D = 3.2, H = 2.6;
+      const backTex = canvasTex(THREE, 512, 256, (g, w, h) => {
+        g.fillStyle = '#e8ecf2'; g.fillRect(0, 0, w, h);
+        g.strokeStyle = '#cdd4de'; g.lineWidth = 2;
+        for (let i = 0; i <= 8; i++) { g.beginPath(); g.moveTo((i * w) / 8, 0); g.lineTo((i * w) / 8, h); g.stroke(); }
+        for (let j = 0; j <= 4; j++) { g.beginPath(); g.moveTo(0, (j * h) / 4); g.lineTo(w, (j * h) / 4); g.stroke(); }
+        g.fillStyle = '#9aa3b2'; for (let i = 0; i < 18; i++) g.fillRect(40 + i * 8, 40, 4, 40);   // air vent
+        g.fillStyle = '#1b2233'; g.fillRect(330, 40, 120, 28); g.fillStyle = '#fff'; g.font = '700 16px monospace'; g.fillText('MSG WV', 352, 60);
+        [['#34d399', 330], ['#ffb020', 352], ['#34d399', 374]].forEach(([c, x]) => { g.fillStyle = c; g.beginPath(); g.arc(x + 8, 90, 5, 0, 7); g.fill(); });
+        noise(g, w, h, 1500, '120,130,150', 0.06);
+      });
+      const floorTex = canvasTex(THREE, 256, 256, (g, w, h) => {
+        g.fillStyle = '#bcc4d0'; g.fillRect(0, 0, w, h);
+        g.fillStyle = '#8a93a3'; for (let y = 8; y < h; y += 16) for (let x = 8; x < w; x += 16) { g.beginPath(); g.arc(x, y, 3.2, 0, 7); g.fill(); }
+        noise(g, w, h, 2000, '255,255,255', 0.08);
+      });
+      floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping; floorTex.repeat.set(4, 2.5);
+      const wallMat = new THREE.MeshStandardMaterial({ map: backTex, roughness: 0.75 });
+      const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.5, metalness: 0.35 });
+      const sideMat = new THREE.MeshStandardMaterial({ color: 0xd3d9e3, roughness: 0.8 });
+      const planeW = new THREE.PlaneGeometry(W, H), planeF = new THREE.PlaneGeometry(W, D), planeS = new THREE.PlaneGeometry(D, H);
+      const floor = new THREE.Mesh(planeF, floorMat); floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+      const backW = new THREE.Mesh(planeW, wallMat); backW.position.set(0, H / 2, -D / 2); backW.receiveShadow = true; scene.add(backW);
+      const left = new THREE.Mesh(planeS, sideMat); left.rotation.y = Math.PI / 2; left.position.set(-W / 2, H / 2, 0); scene.add(left);
+      const right = new THREE.Mesh(planeS, sideMat); right.rotation.y = -Math.PI / 2; right.position.set(W / 2, H / 2, 0); scene.add(right);
+      const ledMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      const ledGeo = new THREE.BoxGeometry(W * 0.8, 0.05, 0.12);
+      const led = new THREE.Mesh(ledGeo, ledMat); led.position.set(0, H - 0.05, -D / 2 + 0.2); scene.add(led);
+      own.push(backTex, floorTex, wallMat, floorMat, sideMat, planeW, planeF, planeS, ledMat, ledGeo);
+      // equipment: camera on a bracket, a tool tray, a sealed bag
+      const darkMat = new THREE.MeshStandardMaterial({ color: 0x343b48, roughness: 0.45, metalness: 0.55 });
+      const camGeo = new THREE.BoxGeometry(0.42, 0.28, 0.32), lensGeo = new THREE.CylinderGeometry(0.09, 0.1, 0.16, 24), armGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.5, 8);
+      const vcam = new THREE.Mesh(camGeo, darkMat); vcam.position.set(1.75, 1.9, -D / 2 + 0.35); vcam.castShadow = true; scene.add(vcam);
+      const lens = new THREE.Mesh(lensGeo, darkMat); lens.rotation.x = Math.PI / 2; lens.position.set(1.75, 1.9, -D / 2 + 0.58); scene.add(lens);
+      const arm = new THREE.Mesh(armGeo, darkMat); arm.rotation.x = Math.PI / 2; arm.position.set(1.75, 1.9, -D / 2 + 0.1); scene.add(arm);
+      const toolMat = new THREE.MeshStandardMaterial({ color: 0x9aa3b2, metalness: 0.7, roughness: 0.3 });
+      const toolTrayGeo = new THREE.BoxGeometry(0.9, 0.06, 0.5), forcepsGeo = new THREE.BoxGeometry(0.6, 0.02, 0.04);
+      const toolTray = new THREE.Mesh(toolTrayGeo, toolMat); toolTray.position.set(-1.85, 0.03, -0.6); toolTray.castShadow = toolTray.receiveShadow = true; scene.add(toolTray);
+      [-0.1, 0.06].forEach((z, i) => { const f = new THREE.Mesh(forcepsGeo, darkMat); f.position.set(-1.85, 0.075, -0.6 + z); f.rotation.y = 0.15 * (i ? 1 : -1); f.castShadow = true; scene.add(f); });
+      const bagMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, roughness: 0.15, clearcoat: 1 });
+      const bagGeo = new THREE.BoxGeometry(0.7, 0.12, 0.55);
+      const bag = new THREE.Mesh(bagGeo, bagMat); bag.position.set(1.9, 0.06, -0.3); bag.rotation.y = -0.3; scene.add(bag);
+      own.push(darkMat, camGeo, lensGeo, armGeo, toolMat, toolTrayGeo, forcepsGeo, bagMat, bagGeo);
+      // glove ports in the foreground
+      const frameMat = new THREE.MeshStandardMaterial({ color: 0x5b6577, roughness: 0.45, metalness: 0.6 });
+      const portGeo = new THREE.TorusGeometry(0.42, 0.07, 16, 56);
+      own.push(frameMat, portGeo);
+      [-1.95, 1.95].forEach((x) => { const port = new THREE.Mesh(portGeo, frameMat); port.position.set(x, 0.55, D / 2 + 0.25); port.scale.setScalar(0.8); scene.add(port); });
 
-      // sample tray on the floor of the (open) work chamber
-      const tray = new THREE.Group();
-      tray.position.set(0, wb.min.y + (wb.max.y - wb.min.y) * 0.27, 0);
-      tray.scale.setScalar(0.85);
-      scene.add(tray);
-      const plateGeo = new THREE.BoxGeometry(2.3, 0.08, 1.55);
-      const plateMat = new THREE.MeshStandardMaterial({ color: 0x9aa4b6, metalness: 0.6, roughness: 0.4 });
-      tray.add(new THREE.Mesh(plateGeo, plateMat));
-      const glassGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.42, 20, 1, true);
-      const glassMat = new THREE.MeshStandardMaterial({ color: 0xdfe9ff, transparent: true, opacity: 0.28, roughness: 0.05, metalness: 0, side: THREE.DoubleSide, depthWrite: false });
-      const liqGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.26, 16);
-      const capGeo = new THREE.CylinderGeometry(0.135, 0.135, 0.09, 20);
-      const capMat = new THREE.MeshStandardMaterial({ color: 0xf2f4f8, roughness: 0.5 });
-      const liqMats = LIQUID.map((c) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.25, roughness: 0.3 }));
-      const ringGeo = new THREE.TorusGeometry(0.17, 0.02, 8, 28);
-      const ringMats = { right: new THREE.MeshBasicMaterial({ color: 0x34d399 }), wrong: new THREE.MeshBasicMaterial({ color: 0xff5c5c }) };
-      own.push(plateGeo, plateMat, glassGeo, glassMat, liqGeo, capGeo, capMat, ringGeo, ...liqMats, ...Object.values(ringMats));
+      // the vial rack: rounded anodised body, engraved top plate with A–D / 1–3
+      const rack = new THREE.Group(); rack.position.set(0, 0, 0.1); scene.add(rack);
+      const rr = new THREE.Shape(); const RW = 2.5, RD = 1.75, RR = 0.14;
+      rr.moveTo(-RW / 2 + RR, -RD / 2); rr.lineTo(RW / 2 - RR, -RD / 2); rr.quadraticCurveTo(RW / 2, -RD / 2, RW / 2, -RD / 2 + RR);
+      rr.lineTo(RW / 2, RD / 2 - RR); rr.quadraticCurveTo(RW / 2, RD / 2, RW / 2 - RR, RD / 2); rr.lineTo(-RW / 2 + RR, RD / 2);
+      rr.quadraticCurveTo(-RW / 2, RD / 2, -RW / 2, RD / 2 - RR); rr.lineTo(-RW / 2, -RD / 2 + RR); rr.quadraticCurveTo(-RW / 2, -RD / 2, -RW / 2 + RR, -RD / 2);
+      const rackGeo = new THREE.ExtrudeGeometry(rr, { depth: 0.2, bevelEnabled: true, bevelSize: 0.03, bevelThickness: 0.03, bevelSegments: 3, curveSegments: 8 });
+      rackGeo.rotateX(-Math.PI / 2);
+      const rackMat = new THREE.MeshStandardMaterial({ color: 0x2c4f92, roughness: 0.32, metalness: 0.6 });
+      const rackBody = new THREE.Mesh(rackGeo, rackMat); rackBody.castShadow = rackBody.receiveShadow = true; rack.add(rackBody);
+      const plateTex = canvasTex(THREE, 512, 360, (g, w, h) => {
+        g.fillStyle = '#3561ad'; g.fillRect(0, 0, w, h);
+        noise(g, w, h, 4000, '255,255,255', 0.05);
+        g.fillStyle = '#dfe8ff'; g.font = '700 26px "JetBrains Mono", monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
+        ['A', 'B', 'C', 'D'].forEach((c, i) => g.fillText(c, w * (0.152 + i * 0.232), 24));
+        ['1', '2', '3'].forEach((c, j) => g.fillText(c, 22, h * (0.2 + j * 0.3) + 16));
+        g.fillStyle = '#0b1222';
+        for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) { g.beginPath(); g.arc(w * (0.152 + i * 0.232), h * (0.2 + j * 0.3) + 16, 34, 0, 7); g.fill(); }
+        g.fillStyle = '#ffb020'; g.fillRect(w - 70, h - 24, 56, 10);
+      });
+      const plateMat = new THREE.MeshStandardMaterial({ map: plateTex, roughness: 0.35, metalness: 0.4 });
+      const plateGeo = new THREE.PlaneGeometry(RW, RD);
+      const plate = new THREE.Mesh(plateGeo, plateMat); plate.rotation.x = -Math.PI / 2; plate.position.y = 0.232; plate.receiveShadow = true; rack.add(plate);
+      const aoTex = canvasTex(THREE, 128, 128, (g, w, h) => { const r = g.createRadialGradient(64, 64, 20, 64, 64, 64); r.addColorStop(0, 'rgba(0,0,0,.45)'); r.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = r; g.fillRect(0, 0, w, h); }, false);
+      const aoMat = new THREE.MeshBasicMaterial({ map: aoTex, transparent: true, depthWrite: false });
+      const aoGeo = new THREE.PlaneGeometry(RW * 1.35, RD * 1.45);
+      const ao = new THREE.Mesh(aoGeo, aoMat); ao.rotation.x = -Math.PI / 2; ao.position.y = 0.004; rack.add(ao);
+      own.push(rackGeo, rackMat, plateTex, plateMat, plateGeo, aoTex, aoMat, aoGeo);
+
+      const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, transmission: 0.92, thickness: 0.04, roughness: 0.04, ior: 1.45, transparent: true, side: THREE.DoubleSide });
+      const glassGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.46, 32, 1, true);
+      const bottomGeo = new THREE.SphereGeometry(0.11, 24, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+      const liqGeo = new THREE.CylinderGeometry(0.096, 0.096, 0.3, 24);
+      const meniscusGeo = new THREE.CircleGeometry(0.096, 24);
+      const sleeveGeo = new THREE.CapsuleGeometry(0.135, 0.34, 6, 24);
+      const sleeveMat = new THREE.MeshStandardMaterial({ color: 0xf3f5f9, roughness: 0.38, metalness: 0.05 });
+      const capGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.05, 24);
+      const capMat = new THREE.MeshStandardMaterial({ color: 0x9aa3b2, metalness: 0.8, roughness: 0.25 });
+      const liqMats = LIQUID.map((cc) => new THREE.MeshPhysicalMaterial({ color: cc, emissive: cc, emissiveIntensity: 0.18, roughness: 0.15, clearcoat: 0.6 }));
+      const ringGeo = new THREE.TorusGeometry(0.2, 0.025, 10, 40);
+      const ringMats = { right: new THREE.MeshBasicMaterial({ color: 0x1fb57a }), wrong: new THREE.MeshBasicMaterial({ color: 0xe23b3b }) };
+      own.push(glassMat, glassGeo, bottomGeo, liqGeo, meniscusGeo, sleeveGeo, sleeveMat, capGeo, capMat, ringGeo, ...liqMats, ...Object.values(ringMats));
       const vials = Array.from({ length: 12 }, (_, i) => {
         const col = i % 4, row = Math.floor(i / 4);
-        const g = new THREE.Group(); g.position.set(-0.81 + col * 0.54, 0.25, -0.5 + row * 0.5);
+        const x = -RW / 2 + RW * (0.152 + col * 0.232), z = -RD / 2 + RD * ((0.2 + row * 0.3) + 16 / 360);
+        const gv = new THREE.Group(); gv.position.set(x, 0.42, z); rack.add(gv);
+        const liq = new THREE.Mesh(liqGeo, liqMats[0]); liq.position.y = -0.07; liq.castShadow = true;
+        const men = new THREE.Mesh(meniscusGeo, liqMats[0]); men.rotation.x = -Math.PI / 2; men.position.y = 0.081;
         const glass = new THREE.Mesh(glassGeo, glassMat);
-        const liq = new THREE.Mesh(liqGeo, liqMats[0]); liq.position.y = -0.07;
-        const cap = new THREE.Mesh(capGeo, capMat);
+        const bottom = new THREE.Mesh(bottomGeo, glassMat); bottom.position.y = -0.23;
+        const cap = new THREE.Mesh(capGeo, capMat); cap.position.y = 0.25;
+        const sleeve = new THREE.Mesh(sleeveGeo, sleeveMat); sleeve.castShadow = true;
         const ring = new THREE.Mesh(ringGeo, ringMats.right); ring.rotation.x = Math.PI / 2; ring.position.y = -0.2; ring.visible = false;
-        g.add(liq, glass, cap, ring); tray.add(g);
-        return { g, liq, cap, ring, lift: 0, capY: 0.5 };
+        gv.add(liq, men, glass, bottom, cap, sleeve, ring);
+        return { gv, liq, men, sleeve, ring, lift: 0, sy: 1.25 };
       });
 
-      const camBase = new THREE.Vector3(0, tray.position.y + 2.5, wb.max.z + 2.4);
-      camera.position.copy(camBase);
-      camera.lookAt(0, tray.position.y + 0.2, 0);
+      camera.position.set(0, 3.9, 2.6);
+      camera.lookAt(0, 0.25, 0.1);
+      const btns = [...host.querySelectorAll('.slot')];
+      const tmp = new THREE.Vector3();
       let lastCodes = null, last = performance.now();
+      const ease = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
       return {
         own,
         frame(S, now) {
           const dt = Math.min(0.1, (now - last) / 1000); last = now;
-          if (S.codes !== lastCodes && S.codes && S.codes.length) {          // new tray: colour the samples
+          if (S.codes !== lastCodes && S.codes && S.codes.length) {
             lastCodes = S.codes;
-            vials.forEach((v, i) => { const c = S.codes[i] || ''; v.liq.material = liqMats[(c.charCodeAt(0) + c.charCodeAt(1)) % liqMats.length]; });
+            vials.forEach((v, i) => { const cc = S.codes[i] || '00'; v.liq.material = v.men.material = liqMats[(cc.charCodeAt(0) * 7 + cc.charCodeAt(1)) % liqMats.length]; });
           }
+          rack.rotation.y = S.rotated ? Math.PI * ease((now - S.rotAt) / 1200) : 0;
+          const capped = S.phase === 'cap' || S.phase === 'rotate' || S.phase === 'recall';
+          const w = host.clientWidth, h = host.clientHeight;
+          camera.position.x = 0.12 * Math.sin(now / 5000);
+          camera.lookAt(0, 0.25, 0.1);
+          camera.updateMatrixWorld(true); rack.updateMatrixWorld(true);
           vials.forEach((v, i) => {
             const st = S.slots[i] || {};
-            const capped = S.phase === 'recall' && !st.open;
-            const capTarget = capped ? 0.25 : 0.62;                          // cap seated vs floating above (microgravity)
-            v.capY += (capTarget - v.capY) * Math.min(1, dt * 10);
-            v.cap.position.y = v.capY;
-            const liftTarget = st.right || st.wrong ? 0.35 : 0;
-            v.lift += (liftTarget - v.lift) * Math.min(1, dt * 9);
-            v.g.position.y = 0.25 + v.lift;
+            const sleeveOn = capped && !st.open;
+            v.sy += ((sleeveOn ? 0.02 : 1.25) - v.sy) * Math.min(1, dt * 9);
+            v.sleeve.position.y = v.sy;
+            v.sleeve.visible = v.sy < 1.2;
+            const liftT = st.right || st.wrong ? 0.4 : 0;
+            v.lift += (liftT - v.lift) * Math.min(1, dt * 9);
+            v.gv.position.y = 0.42 + v.lift;
             v.ring.visible = !!(st.right || st.wrong);
             if (v.ring.visible) v.ring.material = st.right ? ringMats.right : ringMats.wrong;
-            v.liq.visible = S.phase !== 'recall' || st.open;                // capped vials look opaque
+            const el = btns[i];
+            if (el) {
+              tmp.set(0, 0.05, 0); v.gv.localToWorld(tmp); tmp.project(camera);
+              el.style.left = `${((tmp.x + 1) / 2) * w}px`; el.style.top = `${((1 - tmp.y) / 2) * h}px`;
+            }
           });
-          camera.position.x = camBase.x + 0.15 * Math.sin(now / 4000);
-          camera.lookAt(0, tray.position.y + 0.2, 0);
         },
       };
     });
   }
-  const GLOVEBOX_ROT = [0, -Math.PI / 2, 0];
 
   window.Scene3D = { supported: supportsWebGL, cygnus, docking, eva, water, drill, ultrasound, glovebox };
 })();

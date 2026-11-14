@@ -73,36 +73,36 @@ const OPS = [
   },
   {
     id: 'drill', name: 'Run an emergency drill', short: 'Emergency drill', img: 'drill.jpg',
-    detail: 'Respond to simulated alarms: find the module on the station map and choose the first response.',
-    step: 'Locate the module and pick the right first response', partner: 'crew commander',
+    detail: 'Respond to simulated alarms: prioritise, find the module, take the first action and isolate it.',
+    step: 'Handle the warning first, then isolate the module from your side', partner: 'crew commander',
     skill: 'Decision speed under alarm', check: 'triage',
     title: 'Alarm triage (training)',
-    instr: 'An alarm names a module. Click that module on the station map, then choose the first response: fire → extinguisher, toxic atmosphere → emergency mask, rapid depressurisation → close the hatch. Six alarms, 8 seconds each. This is a simplified training mapping, not the real ISS procedure.',
-    keys: 'Click the module, then the response',
+    instr: 'Sometimes a WARNING and a CAUTION sound together: handle the warning first. Find its module on the station (the view changes with every alarm), choose the first response (fire → extinguisher, toxic atmosphere → emergency mask, rapid depressurisation → close the hatch), then close the hatch that cuts the module off from where you are. Six alarms, 14 seconds each. A simplified training mapping, not the real ISS procedure.',
+    keys: 'Click the module, the response, then the hatch',
     metric: { label: 'Alarm response time', better: 'lower', fmt: fmtMs },
-    crew: { base: [2600, 2450, 2700, 2550, 2500], today: 3400, extras: [['Wrong module', 1, true], ['Wrong response', 0, false], ['Timed out', 0, false]], flags: { wrongModule: 1 } },
+    crew: { base: [5200, 4900, 5400, 5100, 5000], today: 6900, extras: [['Wrong module', 0, false], ['Caution before warning', 1, true], ['Wrong response', 0, false], ['Wrong hatch', 1, true], ['Timed out', 0, false]], flags: { priority: 1, wrongHatch: 1 } },
   },
   {
     id: 'ultrasound', name: 'Perform an ultrasound scan', short: 'Ultrasound scan', img: 'ultrasound.jpg',
     detail: 'Onboard vascular imaging guided in real time by a sonographer on the ground.',
-    step: 'Hold the image steady; save only on the ground call', partner: 'ground sonographer',
-    skill: 'Smooth pursuit tracking', check: 'pursuit',
-    title: 'Keep the vessel in view',
-    instr: 'Move the probe (mouse, finger or arrow keys) to keep the crosshair on the moving vessel. The image quality fills while you stay on it; when it is full the sonographer calls SAVE. Save three images. Saving before the call does not count.',
-    keys: 'Mouse / touch or arrows move the probe · Space saves',
+    step: 'Follow the ground call: site, angle, pressure; save only on SAVE', partner: 'ground sonographer',
+    skill: 'Guided fine motor control', check: 'pursuit',
+    title: 'Guided vascular scan',
+    instr: 'The ground sonographer guides you to three sites on the artery. On each one hold the probe across the vessel (rotate it), keep it on the marked site as the neck moves with breathing, and press moderately: too light loses contact, too hard collapses the vein. When the image is full the sonographer calls SAVE. Saving before the call does not count.',
+    keys: 'Mouse / arrows move · wheel or Q / E rotate · hold the mouse button or Shift to press · Space saves',
     metric: { label: 'Time on target', better: 'higher', fmt: fmtPct },
-    crew: { base: [78, 81, 76, 80, 79], today: 59, extras: [['Saves before the call', 1, true], ['Images lost before saving', 2, true]], flags: { early: 1, lost: 2 } },
+    crew: { base: [58, 62, 55, 60, 57], today: 41, extras: [['Saves before the call', 1, true], ['Images lost before saving', 2, true], ['Vein collapsed (over-pressure)', 1, true]], flags: { early: 1, lost: 2, overpress: 1 } },
   },
   {
     id: 'experiment', name: 'Run a microgravity experiment', short: 'Science glovebox', img: 'experiment.jpg',
     detail: 'Transfer samples from a tray into the Microgravity Science Glovebox in the order of the record.',
     step: 'Take the sample named in the record, from the right slot', partner: 'crew partner',
     skill: 'Working memory', check: 'tray',
-    title: 'Sample tray recall',
-    instr: 'Study the sample tray for 6 seconds. The vials are then capped. For each line of the experiment record, tap the slot that holds that sample. Two trays, three samples each.',
-    keys: 'Tap the slot',
+    title: 'Sample rack recall',
+    instr: 'Study the 12 vials in the glovebox rack for 6 seconds; the caps then close. For each line of the experiment record, pick the vial that holds that sample. The second rack is turned 180° after capping, as when you reach in from the other glove port: find the sample where it is now. Two racks, three samples each.',
+    keys: 'Click the vial',
     metric: { label: 'Recall accuracy', better: 'higher', fmt: fmtPct },
-    crew: { base: [100, 83, 100, 100, 83], today: 67, extras: [['Wrong slots', 2, true], ['Median time per sample', '3.1 s', false]], flags: { errors: 2 } },
+    crew: { base: [83, 100, 83, 83, 100], today: 50, extras: [['Wrong vials', 3, true], ['Median time per sample', '3.6 s', false]], flags: { errors: 3 } },
   },
 ];
 const opById = (id) => OPS.find((o) => o.id === id);
@@ -1006,159 +1006,256 @@ function verifyCheck(stage, op, done) {
   return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); if (v3) v3.dispose(); }, running: () => S.on, key: () => false };
 }
 
-// ---------------------------------------------------------
-// 5. Emergency drill — alarm → module on the map → response
-// ---------------------------------------------------------
 const MODULES = [
   { id: 'columbus', name: 'Columbus', area: 'columbus' }, { id: 'kibo', name: 'Kibo', area: 'kibo' },
   { id: 'node2', name: 'Node 2 Harmony', area: 'node2' }, { id: 'lab', name: 'US Lab Destiny', area: 'lab' },
   { id: 'node1', name: 'Node 1 Unity', area: 'node1' }, { id: 'node3', name: 'Node 3 Tranquility', area: 'node3' },
   { id: 'zarya', name: 'Zarya', area: 'zarya' }, { id: 'zvezda', name: 'Zvezda', area: 'zvezda' },
 ];
+const modName = (id) => MODULES.find((m) => m.id === id).name;
+// Hatches between pressurised modules (simplified station graph)
+const HATCHES = [['kibo', 'node2'], ['columbus', 'node2'], ['node2', 'lab'], ['lab', 'node1'], ['node1', 'node3'], ['node1', 'zarya'], ['zarya', 'zvezda']];
 const ALARMS = [
   { type: 'fire', label: 'FIRE', resp: 'ext' },
   { type: 'tox', label: 'TOXIC ATMOSPHERE', resp: 'mask' },
   { type: 'dep', label: 'RAPID DEPRESS', resp: 'hatch' },
 ];
+const CAUTIONS = ['Cabin fan speed low', 'Water tank quantity low', 'Payload rack temperature high', 'CO₂ filter ΔP high'];
 const RESPONSES = [{ id: 'ext', label: 'Fire extinguisher' }, { id: 'mask', label: 'Emergency mask' }, { id: 'hatch', label: 'Close the hatch' }];
+// The hatch that isolates `bad` from the crew member in `you`: last hatch on the path you → bad
+function isolatingHatch(you, bad) {
+  const prev = { [you]: null }, q = [you];
+  while (q.length) {
+    const m = q.shift();
+    if (m === bad) break;
+    HATCHES.forEach(([a, b]) => {
+      const n = a === m ? b : b === m ? a : null;
+      if (n && !(n in prev)) { prev[n] = m; q.push(n); }
+    });
+  }
+  const before = prev[bad];
+  return HATCHES.findIndex(([a, b]) => (a === bad && b === before) || (b === bad && a === before));
+}
+
+// ---------------------------------------------------------
+// 5. Emergency drill — priority, location, first response, isolation
+// ---------------------------------------------------------
 function triageCheck(stage, op, done) {
-  const N = 6, LIMIT = 8000;
+  const N = 6, LIMIT = 14000;
   stage.innerHTML = `
     <div class="sim-box drill">
-      <div class="alarm idle"><span class="alarm-type">STANDBY</span><span class="alarm-mod">Waiting for the drill to start</span></div>
-      <div class="iss-map">${MODULES.map((m) => `<button class="mod" type="button" style="grid-area:${m.area}" data-m="${m.id}">${m.name}</button>`).join('')}</div>
+      <div class="alarm-board">
+        <div class="alarm idle"><span class="alarm-type">STANDBY</span><span class="alarm-mod">Waiting for the drill to start</span></div>
+        <div class="alarm caution" hidden><span class="alarm-type">CAUTION</span><span class="alarm-mod"></span></div>
+        <div class="you-are">You are in <b>—</b></div>
+      </div>
+      <div class="iss-map">${MODULES.map((m) => `<button class="mod" type="button" style="grid-area:${m.area}" data-m="${m.id}">${m.name}</button>`).join('')}
+        <div class="hatch-row">${HATCHES.map(([a, b], i) => `<button class="hatch" type="button" data-h="${i}" disabled title="Hatch ${modName(a)} ↔ ${modName(b)}"><span>${modName(a).split(' ')[0]} ${a.startsWith('node') ? a.slice(-1) : ''}↔${modName(b).split(' ')[0]} ${b.startsWith('node') ? b.slice(-1) : ''}</span></button>`).join('')}</div>
+      </div>
+      <div class="drill-step"><span class="ds" data-s="module">1 · Module</span><span class="ds" data-s="resp">2 · First response</span><span class="ds" data-s="hatch">3 · Isolate</span></div>
       <div class="responses">${RESPONSES.map((r) => `<button class="btn resp" type="button" data-r="${r.id}" disabled>${r.label}</button>`).join('')}</div>
       <div class="timer-bar"><div></div></div>
-      <div class="seq-status"><span class="d-n">Alarm 0 / ${N}</span><span class="d-err">Wrong module 0 · Wrong response 0</span></div>
+      <div class="seq-status"><span class="d-n">Alarm 0 / ${N}</span><span class="d-err">Errors 0</span></div>
     </div>`;
-  const box = $('.drill', stage), alarmEl = $('.alarm', stage);
-  const S = { n: 0, cur: null, found: false, t0: 0, times: [], wrongModule: 0, wrongResp: 0, timeouts: 0, timer: 0, raf: 0, on: false, last: null };
-  const drillState = () => {
-    const mods = {};
-    $$('.mod', stage).forEach((b) => { mods[b.dataset.m] = { hit: b.classList.contains('hit'), miss: b.classList.contains('miss') }; });
-    return { alarm: S.cur ? { type: S.cur.alarm.type, mod: S.cur.mod.id } : null, reveal: S.found, mods, last: S.last };
-  };
-  const v3 = window.Scene3D ? Scene3D.drill($('.iss-map', stage), drillState) : null;   // 3D station schematic
+  const box = $('.drill', stage), alarmEl = $('.alarm:not(.caution)', stage), cautEl = $('.alarm.caution', stage);
+  const S = { n: 0, cur: null, step: 'module', t0: 0, times: [], wrongModule: 0, priority: 0, wrongResp: 0, wrongHatch: 0, timeouts: 0,
+    timer: 0, raf: 0, on: false, last: null, view: { yaw: 0, pitch: 0.55, dist: 1 }, viewFrom: null, viewAt: 0 };
+  const errors = () => S.wrongModule + S.priority + S.wrongResp + S.wrongHatch;
   const status = () => {
     $('.d-n', stage).textContent = `Alarm ${Math.min(S.n, N)} / ${N}`;
-    $('.d-err', stage).textContent = `Wrong module ${S.wrongModule} · Wrong response ${S.wrongResp}`;
+    $('.d-err', stage).textContent = `Module ${S.wrongModule} · Priority ${S.priority} · Response ${S.wrongResp} · Hatch ${S.wrongHatch}`;
+    $$('.ds', stage).forEach((d) => d.classList.toggle('on', !!S.cur && d.dataset.s === S.step));
+  };
+  const drillState = () => {
+    const mods = {}, hatches = [];
+    $$('.mod', stage).forEach((b) => { mods[b.dataset.m] = { hit: b.classList.contains('hit'), miss: b.classList.contains('miss') }; });
+    $$('.hatch', stage).forEach((b) => hatches.push({ shut: b.classList.contains('shut'), miss: b.classList.contains('miss'), live: !b.disabled }));
+    return { alarm: S.cur ? { type: S.cur.alarm.type, mod: S.cur.mod.id } : null, step: S.step, you: S.cur ? S.cur.you : null,
+      reveal: !!S.cur && S.step !== 'module', mods, hatches, last: S.last, view: S.view, viewFrom: S.viewFrom, viewAt: S.viewAt };
+  };
+  const v3 = window.Scene3D ? Scene3D.drill($('.iss-map', stage), drillState) : null;   // 3D station schematic
+  const setStep = (k) => {
+    S.step = k;
+    $$('.resp', stage).forEach((r) => { r.disabled = k !== 'resp'; });
+    $$('.hatch', stage).forEach((h) => { h.disabled = k !== 'hatch'; });
+    status();
   };
   function nextAlarm() {
     clearTimeout(S.timer); cancelAnimationFrame(S.raf);
-    $$('.mod', stage).forEach((b) => b.classList.remove('hit', 'miss', 'target'));
-    $$('.resp', stage).forEach((b) => { b.disabled = true; b.classList.remove('wrong'); });
+    $$('.mod', stage).forEach((b) => b.classList.remove('hit', 'miss'));
+    $$('.hatch', stage).forEach((b) => b.classList.remove('shut', 'miss'));
+    $$('.resp', stage).forEach((b) => b.classList.remove('wrong'));
+    S.cur = null; setStep('module');
     if (S.n >= N) { finish(); return; }
-    alarmEl.className = 'alarm idle';
-    $('.alarm-type', stage).textContent = 'ALL CLEAR';
-    $('.alarm-mod', stage).textContent = 'Stand by…';
+    alarmEl.className = 'alarm idle'; cautEl.hidden = true;
+    $('.alarm-type', alarmEl).textContent = 'ALL CLEAR'; $('.alarm-mod', alarmEl).textContent = 'Stand by…';
     S.timer = setTimeout(() => {
       if (!S.on) return;
-      S.cur = { alarm: pick(ALARMS), mod: pick(MODULES) };
-      S.found = false; S.n++; status();
-      alarmEl.className = `alarm ${S.cur.alarm.type}`;
-      $('.alarm-type', stage).textContent = S.cur.alarm.label;
-      $('.alarm-mod', stage).textContent = S.cur.mod.name;
+      const mod = pick(MODULES), alarm = pick(ALARMS);
+      const you = pick(MODULES.filter((m) => m.id !== mod.id)).id;
+      const caution = Math.random() < 0.45 ? { text: pick(CAUTIONS), mod: pick(MODULES.filter((m) => m.id !== mod.id)).id } : null;
+      S.cur = { mod, alarm, you, caution, hatch: isolatingHatch(you, mod.id) };
+      S.n++;
+      // a new point of view on the station for every alarm
+      S.viewFrom = { ...S.view }; S.viewAt = performance.now();
+      S.view = { yaw: rand(-1.1, 1.1), pitch: rand(0.25, 1.05) * (Math.random() < 0.2 ? -1 : 1), dist: rand(0.9, 1.1) };
+      alarmEl.className = `alarm ${alarm.type}`;
+      $('.alarm-type', alarmEl).textContent = `WARNING · ${alarm.label}`;
+      $('.alarm-mod', alarmEl).textContent = mod.name;
+      if (caution) { cautEl.hidden = false; $('.alarm-mod', cautEl).textContent = `${caution.text} — ${modName(caution.mod)}`; }
+      // the two alerts appear in random order on the board
+      $('.alarm-board', stage).classList.toggle('swap', !!caution && Math.random() < 0.5);
+      $('.you-are b', stage).textContent = modName(you);
+      setStep('module');
       S.t0 = performance.now();
-      if (v3) v3.pump(LIMIT + 300);
+      if (v3) v3.pump(LIMIT + 400);
       const bar = $('.timer-bar > div', stage);
       const tick = () => { const p = Math.min(1, (performance.now() - S.t0) / LIMIT); bar.style.width = `${(1 - p) * 100}%`; if (p < 1 && S.on) S.raf = requestAnimationFrame(tick); };
       tick();
-      S.timer = setTimeout(() => { S.timeouts++; toast('Alarm timed out'); S.cur = null; nextAlarm(); }, LIMIT);
-    }, rand(700, 1400));
+      S.timer = setTimeout(() => { S.timeouts++; toast('Alarm timed out'); nextAlarm(); }, LIMIT);
+    }, rand(700, 1300));
   }
+  const flash = (b, cls = 'miss') => { b.classList.remove(cls); void b.offsetWidth; b.classList.add(cls); if (v3) v3.pump(700); };
   function clickModule(b) {
-    if (!S.on || !S.cur || S.found) return;
-    if (b.dataset.m === S.cur.mod.id) {
-      S.found = true; b.classList.add('hit');
-      if (v3) v3.pump(1500);
-      $$('.resp', stage).forEach((r) => { r.disabled = false; });
-    } else {
-      S.wrongModule++; status();
-      if (v3) v3.pump(600);
-      b.classList.remove('miss'); void b.offsetWidth; b.classList.add('miss');
-    }
+    if (!S.on || !S.cur || S.step !== 'module') return;
+    const id = b.dataset.m;
+    if (id === S.cur.mod.id) { b.classList.add('hit'); setStep('resp'); if (v3) v3.pump(1500); return; }
+    if (S.cur.caution && id === S.cur.caution.mod) { S.priority++; toast('That is the CAUTION. Handle the WARNING first'); }
+    else S.wrongModule++;
+    status(); flash(b);
   }
   function clickResp(b) {
-    if (!S.on || !S.cur || !S.found) return;
+    if (!S.on || !S.cur || S.step !== 'resp') return;
     if (b.dataset.r === S.cur.alarm.resp) {
-      S.times.push(performance.now() - S.t0);
       S.last = { resp: b.dataset.r, mod: S.cur.mod.id, at: performance.now() };
-      if (v3) v3.pump(1300);
-      S.cur = null;
-      toast('Correct first response');
-      nextAlarm();
-    } else {
-      S.wrongResp++; status();
-      b.classList.remove('wrong'); void b.offsetWidth; b.classList.add('wrong');
-    }
+      setStep('hatch'); if (v3) v3.pump(1500);
+      toast(`Now isolate ${S.cur.mod.name} from ${modName(S.cur.you)}`);
+    } else { S.wrongResp++; status(); flash(b, 'wrong'); }
+  }
+  function clickHatch(b) {
+    if (!S.on || !S.cur || S.step !== 'hatch') return;
+    if (+b.dataset.h === S.cur.hatch) {
+      b.classList.add('shut'); S.times.push(performance.now() - S.t0);
+      toast('Module isolated'); if (v3) v3.pump(1200);
+      clearTimeout(S.timer); cancelAnimationFrame(S.raf);
+      S.timer = setTimeout(nextAlarm, 700);
+      S.step = 'done'; status();
+    } else { S.wrongHatch++; status(); flash(b); toast('That hatch does not cut you off from the module'); }
   }
   function finish() {
     S.on = false;
-    alarmEl.className = 'alarm idle';
-    $('.alarm-type', stage).textContent = 'DRILL COMPLETE';
-    $('.alarm-mod', stage).textContent = '';
+    alarmEl.className = 'alarm idle'; cautEl.hidden = true;
+    $('.alarm-type', alarmEl).textContent = 'DRILL COMPLETE'; $('.alarm-mod', alarmEl).textContent = '';
     const valid = S.times.length >= 4;
     done({
       metric: valid ? Math.round(median(S.times)) : NaN, valid,
-      extras: [['Alarms handled', `${S.times.length} / ${N}`, S.times.length < N], ['Wrong module', S.wrongModule, S.wrongModule > 0], ['Wrong response', S.wrongResp, S.wrongResp > 0], ['Timed out', S.timeouts, S.timeouts > 0]],
-      flags: { wrongModule: S.wrongModule, wrongResp: S.wrongResp, timeouts: S.timeouts },
+      extras: [['Alarms handled', `${S.times.length} / ${N}`, S.times.length < N], ['Wrong module', S.wrongModule, S.wrongModule > 0],
+        ['Caution before warning', S.priority, S.priority > 0], ['Wrong response', S.wrongResp, S.wrongResp > 0],
+        ['Wrong hatch', S.wrongHatch, S.wrongHatch > 0], ['Timed out', S.timeouts, S.timeouts > 0]],
+      flags: { wrongModule: S.wrongModule, priority: S.priority, wrongResp: S.wrongResp, wrongHatch: S.wrongHatch, timeouts: S.timeouts, errors: errors() },
     });
   }
-  overlay(box, 'Start the drill (6 alarms)', () => { Object.assign(S, { n: 0, times: [], wrongModule: 0, wrongResp: 0, timeouts: 0, on: true }); status(); nextAlarm(); });
+  overlay(box, `Start the drill (${N} alarms)`, () => {
+    Object.assign(S, { n: 0, times: [], wrongModule: 0, priority: 0, wrongResp: 0, wrongHatch: 0, timeouts: 0, on: true });
+    status(); nextAlarm();
+  }, 'Warnings before cautions · find the module · first response · isolate it from where you are.');
   $$('.mod', stage).forEach((b) => b.addEventListener('click', () => clickModule(b)));
   $$('.resp', stage).forEach((b) => b.addEventListener('click', () => clickResp(b)));
+  $$('.hatch', stage).forEach((b) => b.addEventListener('click', () => clickHatch(b)));
   return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); if (v3) v3.dispose(); }, running: () => S.on, key: () => false };
 }
 
 // ---------------------------------------------------------
-// 6. Ultrasound — pursuit tracking, save on the ground call
+// 6. Ultrasound — position, probe angle and pressure, guided from the ground
 // ---------------------------------------------------------
 function pursuitCheck(stage, op, done) {
-  const NEED = 3, LIMIT = 45000, TOL = 0.075;
+  const NEED = 3, LIMIT = 60000, POS_TOL = 0.05, ANG_TOL = 0.26, P_LO = 0.35, P_HI = 0.68;
   stage.innerHTML = `
     <div class="reh-wrap">
       <div class="sim-box us-screen">
         <div class="us-fan"></div>
         <div class="us-vessel"></div>
         <div class="us-probe"></div>
-        <div class="hud-tl">Images <b class="u-n">0</b> / 3</div>
-        <div class="hud-tr u-time">45.0 s</div>
+        <div class="hud-tl">Images <b class="u-n">0</b> / ${NEED}</div>
+        <div class="hud-tr u-time">60.0 s</div>
       </div>
-      <aside class="cmd-panel">
+      <aside class="cmd-panel us-panel">
         <span class="label">Ground sonographer</span>
         <div class="cmd hold">WAIT</div>
+        <div class="us-guide">Place the probe on the marked site</div>
         <span class="label">Image quality</span>
         <div class="meter"><div></div></div>
+        <span class="label">Probe pressure</span>
+        <div class="meter press"><i class="band"></i><div></div></div>
         <div class="align-state u-on">On target 0%</div>
+        <div class="us-pad">
+          <button class="btn" type="button" data-k="rl" aria-label="Rotate counter-clockwise">⟲</button>
+          <button class="btn" type="button" data-k="press">Hold to press</button>
+          <button class="btn" type="button" data-k="rr" aria-label="Rotate clockwise">⟳</button>
+        </div>
         <button class="btn cap-btn u-save" type="button">Save image</button>
       </aside>
     </div>`;
-  const box = $('.us-screen', stage), ves = $('.us-vessel', stage), probe = $('.us-probe', stage), cmd = $('.cmd', stage);
-  const S = { t0: 0, x: 0.5, y: 0.5, vx: 0.5, vy: 0.5, p1: 0, p2: 0, q: 0, cmd: 'hold', on: 0, total: 0, saved: 0, early: 0, lost: 0, keys: {}, usePointer: false };
+  const box = $('.us-screen', stage), ves = $('.us-vessel', stage), probe = $('.us-probe', stage), cmd = $('.cmd', stage), guide = $('.us-guide', stage);
+  const S = { t0: 0, x: 0.2, y: 0.3, ang: 0, p: 0.1, pressing: false, keys: {}, usePointer: false, ph: 0, sites: [], site: 0,
+    q: 0, cmd: 'hold', on: 0, total: 0, saved: 0, early: 0, lost: 0, overpress: 0, overT: 0, vx: 0.5, vy: 0.5, vdir: 0, onT: false };
   const setCmd = (k) => { S.cmd = k; cmd.textContent = k === 'hold' ? 'WAIT' : 'SAVE'; cmd.className = `cmd ${k}`; };
-  const V = { x: 0.5, y: 0.5, vx: 0.5, vy: 0.5, q: 0, onT: false };
-  const usState = () => Object.assign(V, { x: S.x, y: S.y, vx: S.vx, vy: S.vy, q: S.q });
-  const v3 = window.Scene3D ? Scene3D.ultrasound(box, usState) : null;   // 3D probe on skin + echo inset
+  // artery runs head (top) → feet (bottom); breathing sways it
+  const arteryX = (y, t) => 0.5 + 0.17 * Math.sin(2.3 * y + S.ph) + 0.025 * Math.sin(t * 0.5);
+  const arteryDir = (y, t) => Math.atan2(1, 0.17 * 2.3 * Math.cos(2.3 * y + S.ph));   // screen angle of the vessel axis
+  const wrapA = (a) => { a = (a + Math.PI) % (2 * Math.PI); if (a < 0) a += 2 * Math.PI; return a - Math.PI; };
+  const V = { x: 0, y: 0, ang: 0, p: 0, vx: 0, vy: 0, vdir: 0, q: 0, onT: false, ph: 0, sites: [], site: 0, t0: 0, saved: 0, conds: null };
+  const usState = () => Object.assign(V, { x: S.x, y: S.y, ang: S.ang, p: S.p, vx: S.vx, vy: S.vy, vdir: S.vdir, q: S.q, onT: S.onT,
+    ph: S.ph, sites: S.sites, site: S.site, t0: S.t0, saved: S.saved, conds: S.conds });
+  const v3 = window.Scene3D ? Scene3D.ultrasound(box, usState) : null;   // 3D probe on skin + echo image
   const L = loop((now, dt) => {
     const t = (now - S.t0) / 1000;
-    S.vx = 0.5 + 0.28 * Math.sin(0.41 * t + S.p1) + 0.07 * Math.sin(1.37 * t + S.p2);
-    S.vy = 0.55 + 0.22 * Math.sin(0.53 * t + S.p2) + 0.06 * Math.sin(1.11 * t);
+    // controls
     if (!S.usePointer) {
       const dx = (S.keys.right ? 1 : 0) - (S.keys.left ? 1 : 0), dy = (S.keys.down ? 1 : 0) - (S.keys.up ? 1 : 0);
-      S.x = clamp(S.x + dx * 0.45 * dt, 0.03, 0.97); S.y = clamp(S.y + dy * 0.45 * dt, 0.05, 0.95);
+      S.x = clamp(S.x + dx * 0.32 * dt, 0.03, 0.97); S.y = clamp(S.y + dy * 0.32 * dt, 0.05, 0.95);
     }
+    S.ang = wrapA(S.ang + ((S.keys.rr ? 1 : 0) - (S.keys.rl ? 1 : 0)) * 1.6 * dt);
+    const pressing = S.pressing || S.keys.shift || S.keys.press;
+    S.p = clamp(S.p + (pressing ? 0.75 : -0.75) * dt, 0.05, 1);
+    // target site on the artery
+    const sy = S.sites[S.site];
+    S.vy = sy; S.vx = arteryX(sy, t); S.vdir = arteryDir(sy, t);
     const asp = box.clientWidth / Math.max(1, box.clientHeight);
-    const onT = Math.hypot((S.x - S.vx) * asp, S.y - S.vy) / asp < TOL;
-    S.total += dt; if (onT) S.on += dt;
-    S.q = clamp(S.q + (onT ? 0.42 : -0.55) * dt, 0, 1);
+    const dPos = Math.hypot((S.x - S.vx) * asp, S.y - S.vy) / asp;
+    // transverse view: probe face across the vessel → probe axis ⟂ vessel axis
+    let dA = Math.abs(wrapA(S.ang - (S.vdir + Math.PI / 2)));
+    dA = Math.min(dA, Math.PI - dA);
+    const posOk = dPos < POS_TOL, angOk = dA < ANG_TOL, pOk = S.p >= P_LO && S.p <= P_HI;
+    S.conds = { posOk, angOk, pOk };
+    S.onT = posOk && angOk && pOk;
+    S.total += dt; if (S.onT) S.on += dt;
+    if (S.p > 0.88) { S.overT += dt; if (S.overT > 0.6) { S.overpress++; S.overT = -1e9; toast('Too much pressure: the vein has collapsed'); } }
+    else if (S.p < 0.7) S.overT = 0;
+    S.q = clamp(S.q + (S.onT ? 0.42 : -0.6) * dt, 0, 1);
     if (S.cmd === 'hold' && S.q >= 1) setCmd('go');
     if (S.cmd === 'go' && S.q < 0.55) { setCmd('hold'); S.lost++; toast('Image lost before saving'); }
+    // guidance from the ground: the biggest problem first
+    let g;
+    if (S.cmd === 'go') g = 'Hold it… SAVE now';
+    else if (!posOk) {
+      const ex = (S.vx - S.x) * asp, ey = S.vy - S.y;
+      g = Math.abs(ey) > Math.abs(ex) ? (ey < 0 ? 'Slide towards the head' : 'Slide towards the feet') : (ex < 0 ? 'Slide left' : 'Slide right');
+    } else if (!angOk) {
+      const want = wrapA(S.vdir + Math.PI / 2 - S.ang), w2 = Math.abs(want) > Math.PI / 2 ? wrapA(want + Math.PI) : want;
+      g = w2 > 0 ? 'Rotate clockwise' : 'Rotate counter-clockwise';
+    } else if (!pOk) g = S.p < P_LO ? 'A bit more pressure' : 'Less pressure';
+    else g = 'Good, hold steady';
+    if (guide.textContent !== g) guide.textContent = g;
+    // 2D fallback drawing
     ves.style.left = `${S.vx * 100}%`; ves.style.top = `${S.vy * 100}%`;
     probe.style.left = `${S.x * 100}%`; probe.style.top = `${S.y * 100}%`;
-    probe.classList.toggle('on', onT);
-    if (v3 && v3.ready) { usState(); V.onT = onT; v3.frame(V, now); }
-    $('.meter > div', stage).style.width = `${S.q * 100}%`;
+    probe.style.transform = `rotate(${S.ang}rad)`;
+    probe.classList.toggle('on', S.onT);
+    $('.meter:not(.press) > div', stage).style.width = `${S.q * 100}%`;
+    $('.meter.press > div', stage).style.width = `${S.p * 100}%`;
     $('.u-on', stage).textContent = `On target ${Math.round((S.on / Math.max(0.01, S.total)) * 100)}%`;
+    if (v3 && v3.ready) v3.frame(usState(), now);
     const left = LIMIT - (now - S.t0);
     $('.u-time', stage).textContent = `${Math.max(0, left / 1000).toFixed(1)} s`;
     if (left <= 0) { finish(); return false; }
@@ -1170,15 +1267,17 @@ function pursuitCheck(stage, op, done) {
     S.saved++; S.q = 0; setCmd('hold');
     $('.u-n', stage).textContent = S.saved;
     box.classList.add('flash'); setTimeout(() => box.classList.remove('flash'), 300);
-    if (S.saved >= NEED) finish();
+    if (S.saved >= NEED) { finish(); return; }
+    S.site++; toast(`Image ${S.saved} saved. Next site`);
   }
   function finish() {
-    L.stop();
+    L.stop(); S.pressing = false;
     const valid = S.total >= 8;
     done({
       metric: valid ? (S.on / S.total) * 100 : NaN, valid,
-      extras: [['Images saved', `${S.saved} / ${NEED}`, S.saved < NEED], ['Saves before the call', S.early, S.early > 0], ['Images lost before saving', S.lost, S.lost > 1]],
-      flags: { early: S.early, lost: S.lost },
+      extras: [['Images saved', `${S.saved} / ${NEED}`, S.saved < NEED], ['Saves before the call', S.early, S.early > 0],
+        ['Images lost before saving', S.lost, S.lost > 1], ['Vein collapsed (over-pressure)', S.overpress, S.overpress > 0]],
+      flags: { early: S.early, lost: S.lost, overpress: S.overpress },
     });
   }
   box.addEventListener('pointermove', (e) => {
@@ -1188,18 +1287,28 @@ function pursuitCheck(stage, op, done) {
     S.x = clamp((e.clientX - r.left) / r.width, 0.03, 0.97);
     S.y = clamp((e.clientY - r.top) / r.height, 0.05, 0.95);
   });
-  box.addEventListener('pointerdown', (e) => { if (L.on && e.pointerType !== 'mouse') e.preventDefault(); });
+  box.addEventListener('pointerdown', (e) => { if (!L.on) return; e.preventDefault(); S.pressing = true; box.setPointerCapture(e.pointerId); });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => box.addEventListener(ev, () => { S.pressing = false; }));
+  box.addEventListener('wheel', (e) => { if (!L.on) return; e.preventDefault(); S.ang = wrapA(S.ang + e.deltaY * 0.0035); }, { passive: false });
+  box.addEventListener('contextmenu', (e) => { if (L.on) e.preventDefault(); });
+  $$('.us-pad [data-k]', stage).forEach((b) => {
+    const k = b.dataset.k;
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); S.keys[k] = true; b.setPointerCapture(e.pointerId); });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => b.addEventListener(ev, () => { S.keys[k] = false; }));
+  });
   $('.u-save', stage).addEventListener('click', save);
   overlay(box, 'Start the scan', () => {
-    Object.assign(S, { t0: performance.now(), x: 0.15, y: 0.3, p1: rand(0, 6.28), p2: rand(0, 6.28), q: 0, on: 0, total: 0, saved: 0, early: 0, lost: 0, usePointer: false });
+    Object.assign(S, { t0: performance.now(), x: 0.18, y: 0.2, ang: rand(-1.2, 1.2), p: 0.1, pressing: false, ph: rand(0, 6.28),
+      sites: shuffle([0.28, 0.5, 0.72]), site: 0, q: 0, on: 0, total: 0, saved: 0, early: 0, lost: 0, overpress: 0, overT: 0, usePointer: false });
     setCmd('hold');
     L.start();
-  });
-  const KEYMAP = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
+  }, 'Across the vessel · on the marked site · moderate pressure. Follow the sonographer.');
+  const KEYMAP = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', q: 'rl', Q: 'rl', e: 'rr', E: 'rr', Shift: 'shift' };
   return {
     stop: () => { L.stop(); if (v3) v3.dispose(); }, running: () => L.on,
     key(e, down) {
-      if (KEYMAP[e.key]) { S.keys[KEYMAP[e.key]] = down; if (down) S.usePointer = false; return L.on; }
+      const k = KEYMAP[e.key];
+      if (k) { S.keys[k] = down; if (down && ['left', 'right', 'up', 'down'].includes(k)) S.usePointer = false; return L.on; }
       if (down && e.code === 'Space' && L.on) { if (!e.repeat) save(); return true; }
       return false;
     },
@@ -1207,32 +1316,37 @@ function pursuitCheck(stage, op, done) {
 }
 
 // ---------------------------------------------------------
-// 7. Microgravity experiment — sample tray working memory
+// 7. Microgravity experiment — vial rack recall; second rack is turned 180°
 // ---------------------------------------------------------
 function trayCheck(stage, op, done) {
-  const ROUNDS = 2, PER = 3, STUDY = 6000, LIMIT = 7000, COLS = 4, ROWS = 3;
+  const ROUNDS = 2, PER = 3, STUDY = 6000, LIMIT = 8000, COLS = 4, ROWS = 3, NS = COLS * ROWS;
   const slotName = (i) => `${'ABCD'[i % COLS]}${Math.floor(i / COLS) + 1}`;
-  const S = { round: 0, codes: [], asks: [], ask: 0, correct: 0, errors: 0, timeouts: 0, times: [], t0: 0, timer: 0, raf: 0, on: false, phase: 'idle' };
+  const S = { round: 0, codes: [], asks: [], ask: 0, correct: 0, errors: 0, timeouts: 0, times: [], t0: 0, timer: 0, raf: 0, on: false,
+    phase: 'idle', rotated: false, rotAt: 0 };
+  stage.innerHTML = `
+    <div class="sim-box seq-card glovebox">
+      <div class="seq-status"><span class="tr-round">Rack 1 of ${ROUNDS}</span><span class="tr-phase">Ready</span><span class="tr-score">Correct 0 · Wrong 0</span></div>
+      <div class="record"><span class="label">Experiment record</span><b class="tr-ask">Study the rack</b></div>
+      <div class="timer-bar"><div></div></div>
+      <div class="tray-stage">
+        <div class="tray">${Array.from({ length: NS }, (_, i) => `
+          <button class="slot" type="button" data-i="${i}" disabled><span class="slot-id">${slotName(i)}</span><span class="vial"></span></button>`).join('')}
+        </div>
+      </div>
+      <p class="tr-note" hidden>The rack has been turned 180°. The vials moved with it.</p>
+    </div>`;
+  const box = $('.glovebox', stage), trayEl = $('.tray', stage);
+  const slots = $$('.slot', stage);
+  const trayState = () => ({
+    phase: S.phase, round: S.round, codes: S.codes, rotated: S.rotated, rotAt: S.rotAt,
+    slots: slots.map((b) => ({ open: b.classList.contains('open'), right: b.classList.contains('right'), wrong: b.classList.contains('wrong') })),
+  });
+  const v3 = window.Scene3D ? Scene3D.glovebox($('.tray-stage', stage), trayState) : null;   // 3D glovebox work volume
   const makeCodes = () => {
     const set = new Set();
-    while (set.size < COLS * ROWS) set.add(`${pick('123456789')}${pick('ABCDEFHKMNPRTX')}`);
+    while (set.size < NS) set.add(`${pick('123456789')}${pick('ABCDEFHKMNPRTX')}`);
     return [...set];
   };
-  function render(showCodes) {
-    $('.tray-ui', stage).innerHTML = `
-      <div class="tray-ui-in">
-        <div class="seq-status"><span>Tray ${S.round + 1} of ${ROUNDS}</span><span class="tr-phase"></span><span>Correct ${S.correct} · Wrong ${S.errors}</span></div>
-        <div class="record"><span class="label">Experiment record</span><b class="tr-ask">Study the tray</b></div>
-        <div class="timer-bar"><div></div></div>
-        <div class="tray">${S.codes.map((c, i) => `
-          <button class="slot${showCodes ? ' open' : ''}" type="button" data-i="${i}" ${showCodes ? 'disabled' : ''}>
-            <span class="slot-id">${slotName(i)}</span><span class="vial">${showCodes ? `SMP-${c}` : ''}</span>
-          </button>`).join('')}
-        </div>
-      </div>`;
-    $$('.slot', stage).forEach((b) => b.addEventListener('click', () => answer(b)));
-    if (v3) v3.pump(9000);
-  }
   const runTimer = (ms, onEnd) => {
     S.t0 = performance.now();
     const bar = $('.timer-bar > div', stage);
@@ -1240,13 +1354,39 @@ function trayCheck(stage, op, done) {
     tick();
     S.timer = setTimeout(onEnd, ms);
   };
+  const score = () => { $('.tr-score', stage).textContent = `Correct ${S.correct} · Wrong ${S.errors}`; };
+  function showCodes(on) {
+    slots.forEach((b, i) => {
+      b.classList.toggle('open', on); b.classList.remove('right', 'wrong');
+      $('.vial', b).textContent = on ? `SMP-${S.codes[i]}` : '';
+      b.disabled = true;
+    });
+  }
   function startRound() {
     S.codes = makeCodes();
     S.asks = shuffle(S.codes.map((c, i) => i)).slice(0, PER);
-    S.ask = 0; S.phase = 'study';
-    render(true);
+    S.ask = 0; S.phase = 'study'; S.rotated = false;
+    trayEl.classList.remove('rot');
+    $('.tr-note', stage).hidden = true;
+    $('.tr-round', stage).textContent = `Rack ${S.round + 1} of ${ROUNDS}`;
     $('.tr-phase', stage).textContent = 'Memorise';
-    runTimer(STUDY, () => { S.phase = 'recall'; render(false); nextAsk(); });
+    $('.tr-ask', stage).textContent = 'Study the rack';
+    showCodes(true);
+    if (v3) v3.pump(STUDY + 4000);
+    runTimer(STUDY, () => {
+      S.phase = 'cap'; showCodes(false);
+      $('.tr-phase', stage).textContent = 'Capping';
+      if (S.round === 1) {
+        // second rack: it is turned around before recall
+        S.timer = setTimeout(() => {
+          S.rotated = true; S.rotAt = performance.now(); S.phase = 'rotate';
+          trayEl.classList.add('rot');
+          $('.tr-phase', stage).textContent = 'Rack turned 180°';
+          $('.tr-note', stage).hidden = false;
+          S.timer = setTimeout(() => { S.phase = 'recall'; nextAsk(); }, 1400);
+        }, 650);
+      } else S.timer = setTimeout(() => { S.phase = 'recall'; nextAsk(); }, 650);
+    });
   }
   function nextAsk() {
     clearTimeout(S.timer); cancelAnimationFrame(S.raf);
@@ -1256,49 +1396,44 @@ function trayCheck(stage, op, done) {
       S.timer = setTimeout(startRound, 900);
       return;
     }
-    $$('.slot', stage).forEach((b) => { b.disabled = false; });
+    slots.forEach((b) => { b.disabled = false; });
     $('.tr-phase', stage).textContent = `Sample ${S.ask + 1} of ${PER}`;
     $('.tr-ask', stage).textContent = `Transfer SMP-${S.codes[S.asks[S.ask]]}`;
     if (v3) v3.pump(LIMIT + 300);
-    runTimer(LIMIT, () => { S.timeouts++; S.errors++; reveal(null); });
+    runTimer(LIMIT, () => { S.timeouts++; S.errors++; score(); reveal(null); });
   }
   function reveal(clicked) {
     clearTimeout(S.timer); cancelAnimationFrame(S.raf);
-    const target = S.asks[S.ask];
-    const tb = $(`.slot[data-i="${target}"]`, stage);
-    tb.classList.add('open', 'right'); $('.vial', tb).textContent = `SMP-${S.codes[target]}`;
+    const tb = slots[S.asks[S.ask]];
+    tb.classList.add('open', 'right'); $('.vial', tb).textContent = `SMP-${S.codes[+tb.dataset.i]}`;
     if (clicked && clicked !== tb) { clicked.classList.add('open', 'wrong'); $('.vial', clicked).textContent = `SMP-${S.codes[+clicked.dataset.i]}`; }
-    $$('.slot', stage).forEach((b) => { b.disabled = true; });
+    slots.forEach((b) => { b.disabled = true; });
     S.ask++;
-    if (v3) v3.pump(2500);
+    if (v3) v3.pump(2600);
     S.timer = setTimeout(() => {
-      $$('.slot', stage).forEach((b) => { b.classList.remove('open', 'right', 'wrong'); $('.vial', b).textContent = ''; });
+      slots.forEach((b) => { b.classList.remove('open', 'right', 'wrong'); $('.vial', b).textContent = ''; });
       nextAsk();
-    }, clicked === tb ? 600 : 1300);
+    }, clicked === tb ? 800 : 1500);
   }
   function answer(b) {
     if (!S.on || S.phase !== 'recall' || b.disabled) return;
     S.times.push(performance.now() - S.t0);
     if (+b.dataset.i === S.asks[S.ask]) S.correct++; else S.errors++;
-    reveal(b);
+    score(); reveal(b);
   }
   function finish() {
-    S.on = false;
+    S.on = false; S.phase = 'idle';
     const total = ROUNDS * PER;
     done({
       metric: (S.correct / total) * 100, valid: true,
-      extras: [['Samples found', `${S.correct} / ${total}`, S.correct < total], ['Wrong slots', S.errors - S.timeouts, S.errors - S.timeouts > 0],
+      extras: [['Samples found', `${S.correct} / ${total}`, S.correct < total], ['Wrong vials', S.errors - S.timeouts, S.errors - S.timeouts > 0],
         ['Timed out', S.timeouts, S.timeouts > 0], ['Median time per sample', S.times.length ? `${(median(S.times) / 1000).toFixed(1)} s` : '—', false]],
       flags: { errors: S.errors },
     });
   }
-  stage.innerHTML = '<div class="sim-box seq-card glovebox"><div class="tray-view"></div><div class="tray-ui"></div></div>';
-  const trayState = () => ({
-    phase: S.phase, round: S.round, codes: S.codes,
-    slots: $$('.slot', stage).map((b) => ({ open: b.classList.contains('open'), right: b.classList.contains('right'), wrong: b.classList.contains('wrong') })),
-  });
-  const v3 = window.Scene3D ? Scene3D.glovebox($('.tray-view', stage), trayState) : null;   // 3D glovebox + sample tray
-  overlay($('.sim-box', stage), 'Open the sample tray', () => { Object.assign(S, { round: 0, correct: 0, errors: 0, timeouts: 0, times: [], on: true }); startRound(); }, 'You will have 6 seconds to memorise 12 samples.');
+  slots.forEach((b) => b.addEventListener('click', () => answer(b)));
+  overlay(box, 'Open the sample rack', () => { Object.assign(S, { round: 0, correct: 0, errors: 0, timeouts: 0, times: [], on: true }); score(); startRound(); },
+    '6 seconds to memorise 12 vials. The second rack is turned around before you recall.');
   return { stop: () => { S.on = false; clearTimeout(S.timer); cancelAnimationFrame(S.raf); if (v3) v3.dispose(); }, running: () => S.on, key: () => false };
 }
 
@@ -1421,15 +1556,18 @@ function agreementText() {
     ],
     water: [[f.errors, `I read the unit ID aloud character by character; ${P} checks it against the work order before I remove the unit.`]],
     drill: [
+      [f.priority, `${cap(P)} reads warnings before cautions; we work the warning first and say "caution later" aloud.`],
+      [f.wrongHatch, `Before closing a hatch I say "isolating <module> from <our side>"; the ${P} confirms which side we are on.`],
       [f.wrongModule, `${cap(P)} calls the module and its location; I repeat both before moving.`],
       [f.wrongResp, `We read the response card aloud: alarm type → first action.`],
       [f.timeouts, `${cap(P)} leads the first response; I follow and confirm each step.`],
     ],
     ultrasound: [
       [f.early, `${cap(P)} calls SAVE; I repeat "saving" before I press.`],
+      [f.overpress, `The ${P} watches the vein on the image and calls "ease off"; I keep a light grip on the probe.`],
       [f.lost > 1, `I brace the probe hand and let the ${P} guide the position verbally before each image.`],
     ],
-    experiment: [[f.errors, `Two-person check: ${P} reads the slot and the sample code; I confirm both before each transfer.`]],
+    experiment: [[f.errors, `Two-person check: the ${P} reads the vial code on the rack, I confirm it against the record before each transfer, and we re-orient the rack before reaching in.`]],
   }[o.id] || [];
   const hit = tips.find(([cond]) => cond);
   if (hit) return hit[1];

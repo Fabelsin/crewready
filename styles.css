@@ -670,3 +670,57 @@ body.access-open { overflow: hidden; }
 .tray-view { display: none; position: relative; overflow: hidden; border-radius: 10px; border: 1px solid var(--line-2); }
 .tray-view.is3d { display: block; height: clamp(200px, 30vh, 280px); }
 .tray-ui-in { display: flex; flex-direction: column; gap: 14px; }
+
+/* ---------- 5. drill v2: alarm board, steps, hatches ---------- */
+.alarm-board { display: flex; flex-direction: column; gap: 8px; }
+.alarm-board.swap { flex-direction: column-reverse; }
+.alarm-board .you-are { order: 9; }
+.alarm.caution { border-color: #c9a227; background: rgba(201,162,39,.12); padding: 8px 18px; }
+.alarm.caution .alarm-type { font-size: 16px; color: #e6c35a; }
+.alarm.caution .alarm-mod { font-size: 15px; color: var(--muted); }
+.you-are { font: 600 13px var(--mono); color: var(--muted); letter-spacing: .04em; }
+.you-are b { color: #8fc0ff; }
+.drill-step { display: flex; gap: 8px; flex-wrap: wrap; }
+.drill-step .ds { font: 600 12px var(--mono); padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line-2); color: var(--muted); }
+.drill-step .ds.on { border-color: var(--blue-hi); color: #fff; background: rgba(61,123,255,.18); }
+.iss-map .hatch-row { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.hatch { font: 600 11px var(--mono); color: var(--text); background: #18233d; border: 1px solid var(--line-2); border-radius: 999px; padding: 6px 10px; cursor: pointer; }
+.hatch:disabled { opacity: .45; cursor: default; }
+.hatch:not(:disabled):hover { border-color: #fff; }
+.hatch.shut { background: rgba(52,211,153,.3); border-color: var(--ok); opacity: 1; }
+.hatch.miss { animation: shake .35s; border-color: var(--danger); background: rgba(255,92,92,.25); }
+.iss-map.is3d .hatch-row { display: contents; }
+.iss-map.is3d .hatch { position: absolute; z-index: 4; width: 26px; height: 26px; padding: 0; transform: translate(-50%, -50%); border-radius: 50%; background: rgba(6,10,20,.25); border: 2px solid rgba(255,255,255,.0); }
+.iss-map.is3d .hatch span { display: none; }
+.iss-map.is3d .hatch:disabled { opacity: 0; pointer-events: none; }
+.iss-map.is3d .hatch:not(:disabled) { border-color: rgba(255,255,255,.9); box-shadow: 0 0 12px rgba(255,255,255,.5); }
+.iss-map.is3d .hatch.shut { opacity: 1; border-color: var(--ok); }
+.iss-map.is3d .mod { transition: none; }
+
+/* ---------- 6. ultrasound v2 ---------- */
+.us-panel { gap: 10px; }
+.us-panel .cmd { padding: 14px 0; font-size: 28px; }
+.us-guide { font: 600 15px var(--body); text-align: center; color: #fff; background: rgba(95,227,255,.12); border: 1px solid rgba(95,227,255,.45); border-radius: 8px; padding: 8px 10px; min-height: 2.6em; display: grid; place-items: center; }
+.meter.press { position: relative; }
+.meter.press > div { background: linear-gradient(90deg, #6aa8ff, #ff5c5c); }
+.meter.press .band { position: absolute; top: 0; bottom: 0; left: 35%; width: 33%; border-left: 2px solid var(--ok); border-right: 2px solid var(--ok); background: rgba(52,211,153,.18); z-index: 1; }
+.us-pad { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 6px; }
+.us-pad .btn { padding: 10px 0; touch-action: none; }
+.us-inset { width: 240px; height: 170px; }
+@media (max-width: 720px) { .us-inset { width: 160px; height: 113px; } }
+
+/* ---------- 7. glovebox v2: vial rack ---------- */
+.glovebox { background: #0b1222; }
+.tray-stage { position: relative; }
+.tray-stage:not(.is3d) .tray.rot { transform: rotate(180deg); }
+.tray-stage:not(.is3d) .tray.rot .slot > span { transform: rotate(180deg); }
+.tr-note { margin: 0; font: 600 13px var(--mono); color: #ffb020; }
+.tray-stage.is3d { height: clamp(300px, 46vh, 440px); border-radius: 12px; overflow: hidden; border: 1px solid var(--line-2); }
+.tray-stage.is3d .tray { position: absolute; inset: 0; display: block; padding: 0; border: 0; background: none; transform: none; z-index: 2; }
+.tray-stage.is3d .slot { position: absolute; width: 54px; height: 74px; min-height: 0; transform: translate(-50%, -50%); border-radius: 14px; border: 2px solid transparent; background: none; box-shadow: none; padding: 0; }
+.tray-stage.is3d .slot:not(:disabled):hover { border-color: rgba(61,123,255,.9); background: rgba(61,123,255,.12); }
+.tray-stage.is3d .slot-id { position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%); font-size: 10px; color: #3b4b70; background: rgba(255,255,255,.75); padding: 0 4px; border-radius: 4px; }
+.tray-stage.is3d .vial { position: absolute; bottom: calc(100% + 2px); left: 50%; transform: translateX(-50%); white-space: nowrap; font: 700 13px var(--mono); min-height: 0; }
+.tray-stage.is3d .slot.open .vial:not(:empty) { background: #0b1222; color: #fff; padding: 3px 6px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.tray-stage.is3d .slot.right { border-color: var(--ok); box-shadow: 0 0 0 3px rgba(52,211,153,.45); }
+.tray-stage.is3d .slot.wrong { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(255,92,92,.45); }
