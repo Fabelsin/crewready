@@ -107,6 +107,56 @@ const OPS = [
 ];
 const opById = (id) => OPS.find((o) => o.id === id);
 
+// ---------- NASA briefings (official footage + quoted NASA description) ----------
+const NASA_ASSET = (id, file) => `https://images-assets.nasa.gov/video/${encodeURIComponent(id)}/${encodeURIComponent(id)}~${file}`;
+const NASA_PAGE = (id) => `https://images.nasa.gov/details/${encodeURIComponent(id)}`;
+const BRIEF = {
+  cygnus: {
+    why: 'During a free-flyer capture the arm operator holds alignment and grapples only when the backup operator calls it. Grappling early, late or off the fixture is the error that matters, so the check measures how fast and how accurately you act on a partner\'s call.',
+    nasa: { id: 'NHQ_2020_1005_NORTHROP GRUMMANS CARGO SHIP ARRIVES AT THE SPACE STATION', video: 'medium.mp4', poster: 'medium.jpg',
+      title: 'Northrop Grumman\'s Cargo Ship Arrives at the Space Station', date: 'NASA HQ, 5 Oct 2020',
+      quote: 'Loaded with almost four tons of supplies and scientific experiments, Northrop Grumman’s uncrewed Cygnus cargo ship arrived at the International Space Station Oct. 5… Cygnus was captured by Expedition 63 Commander Chris Cassidy of NASA using the station’s Canadian-built robotic arm. Ground controllers then installed Cygnus to the Earth-facing port of the Unity module.' },
+  },
+  docking: {
+    why: 'Vehicles dock automatically, and the crew\'s job is to watch the approach and call out anything that leaves its limits. That is sustained vigilance, the skill most sensitive to sleep loss, so the check measures how quickly you notice an out-of-range indicator.',
+    nasa: { id: 'jsc2020m000166_DM-2_Docking_200531', video: 'medium.mp4', poster: 'medium.jpg',
+      title: 'U.S. Astronauts Dock to the International Space Station (Demo-2)', date: 'NASA JSC, 31 May 2020',
+      quote: 'After a 19-hour ride aboard the new SpaceX Crew Dragon spacecraft, NASA astronauts Doug Hurley and Bob Behnken docked to the International Space Station May 31… The Crew Dragon automatically linked up to the international docking adapter at the forward end of the station’s Harmony module.' },
+  },
+  solar: {
+    why: 'Installing a roll-out solar array means driving bolts at several attach points in the right order, each to the right torque, through pressurised gloves. The check combines the two failure modes: the wrong sequence and the wrong torque.',
+    nasa: { id: 'jsc2022m000280_US_EVA_82_Animation_221203', video: 'medium.mp4', poster: 'medium.jpg',
+      title: 'U.S. Spacewalk 82 Animation', date: 'NASA JSC, 2 Dec 2022',
+      quote: 'Expedition 68 Flight Engineers Josh Cassada and Frank Rubio of NASA will conduct a spacewalk to install an ISS Roll-Out Solar Array (iROSA) to augment power generation for the 3A power channel on the station’s starboard four truss… This computer-generated animation of the spacewalk is narrated by ISS Expedition 68 Spacewalk Officer Chris Mundy.' },
+  },
+  water: {
+    why: 'Life-support maintenance often means replacing one of several near-identical units. The typical error is acting on the wrong unit because two IDs look alike, so the check measures how fast you can reliably match an ID against the work order.',
+    nasa: { id: '318_ECLSSWaterRec', video: 'medium.mp4', poster: 'medium.jpg',
+      title: 'NASA ScienceCasts: Water Recovery on the Space Station', date: 'NASA JSC, 20 Jun 2023',
+      quote: 'NASA now has the ability to recycle 98% of the water collected from the US segment on the space station – meeting the threshold necessary for water recovery on long-duration space exploration missions.' },
+  },
+  drill: {
+    why: 'Fire, toxic atmosphere and rapid depressurisation are the emergencies every crew trains for. The first seconds decide the outcome: identify where it is and take the right first action. The check measures that decision time under a flashing alarm.',
+    nasa: { id: 'Saf-VI S8C3+C4 1-sided PMMA_unmapped_jpeg-20x plus text', video: 'medium.mp4', poster: 'thumb.jpg',
+      title: 'Saffire-VI inside Northrop Grumman’s Cygnus spacecraft', date: 'NASA JSC, 9 Jan 2024',
+      quote: 'Saffire, or Spacecraft Fire Safety Experiment, was a series of six investigations that provided insights into how fires grow and spread in space. This research is especially important as it will inform future spacecraft designs bound for the Moon and Mars.' },
+  },
+  ultrasound: {
+    why: 'Onboard ultrasound is performed by crew members, not physicians, while an expert on the ground guides them in real time. Holding the probe steady on a moving structure and saving only on the expert\'s call is the core skill, so the check measures time on target.',
+    nasa: { id: 'HumanHealth', video: 'medium.mp4', poster: 'medium.jpg',
+      title: 'Advancing Human Health: Space Station Benefits', date: 'NASA HQ, 25 Jul 2022',
+      quote: 'A portable ultrasound machine is being evaluated on the Space Station to examine the medical condition of crewmembers. Non-physicians can readily learn the procedure and transmit the ultrasound images to remote experts.',
+      quoteSrc: { id: 'ksc_040504_ultrasound', title: 'NASA KSC release KSC-04-S-00090 (2004)' } },
+  },
+  experiment: {
+    why: 'Glovebox work means taking the right sample from a tray and logging it against the experiment record, often from memory while your hands are in the gloves. The check measures working memory: recalling where each sample is.',
+    nasa: { id: '282_ThinkingInsideBox', video: 'medium.mp4', poster: 'medium.jpg',
+      title: 'NASA ScienceCasts: Thinking Inside the Box', date: 'NASA HQ, 26 Sep 2018',
+      quote: 'Gloveboxes on the ISS allow for experiments on materials that you wouldn\'t want escaping into the station\'s enclosed space.' },
+  },
+};
+OPS.forEach((o) => Object.assign(o, BRIEF[o.id]));
+
 // ---------- State ----------
 const state = {
   mode: 'guest',          // 'guest' | 'crew'
@@ -184,12 +234,83 @@ const intro = {
     this.el.classList.add('closing');
     document.body.classList.remove('intro-open');
     setTimeout(() => { this.el.hidden = true; this.video.pause(); }, 800);
+    if (!session.data) access.open();
   },
 };
 $('#btnEnter').addEventListener('click', () => intro.close());
 $('#btnSkip').addEventListener('click', () => intro.close());
 intro.video.addEventListener('ended', () => intro.close());
 $('#btnReplayIntro').addEventListener('click', () => intro.open());
+
+// =========================================================
+// Crew session (no authentication — local prototype)
+// =========================================================
+const session = {
+  data: null,                                   // { pos, call, mode, opened }
+  load() { try { this.data = JSON.parse(sessionStorage.getItem('crewready.session') || 'null'); } catch { this.data = null; } },
+  save() { try { sessionStorage.setItem('crewready.session', JSON.stringify(this.data)); } catch { /* ignore */ } },
+  clear() { this.data = null; try { sessionStorage.removeItem('crewready.session'); sessionStorage.removeItem('crewready.status'); } catch { /* ignore */ } },
+};
+const access = {
+  el: $('#access'), pos: null, mode: 'guest',
+  open() {
+    this.el.hidden = false;
+    document.body.classList.add('access-open');
+    this.pos = null; this.mode = 'guest';
+    this.sync();
+    setTimeout(() => $('#posGrid button').focus({ preventScroll: true }), 50);
+  },
+  close() { this.el.hidden = true; document.body.classList.remove('access-open'); },
+  sync() {
+    $$('#posGrid [data-pos]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.pos === this.pos)));
+    $$('.session-grid [data-mode]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.mode === this.mode)));
+  },
+};
+$$('#posGrid [data-pos]').forEach((b) => b.addEventListener('click', () => { access.pos = b.dataset.pos; access.sync(); }));
+$$('.session-grid [data-mode]').forEach((b) => b.addEventListener('click', () => { access.mode = b.dataset.mode; access.sync(); }));
+$('#accessForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const call = $('#callsign').value.trim().toUpperCase();
+  if (!access.pos) { toast('Select your crew position'); return; }
+  if (!call) { toast('Enter your call sign or initials'); $('#callsign').focus(); return; }
+  session.data = { pos: access.pos, call, mode: access.mode, opened: new Date().toISOString() };
+  session.save();
+  status.clear();
+  setMode(access.mode);
+  resetRun(state.op);
+  access.close();
+  updateConsole();
+  go('#/');
+  toast(`Session opened: ${access.pos} ${call}`);
+});
+$('#btnEndSession').addEventListener('click', () => {
+  stopCheck();
+  session.clear();
+  updateConsole();
+  go('#/');
+  access.open();
+});
+
+// Session status of each operation (shown on the dashboard)
+const status = {
+  map: {},
+  load() { try { this.map = JSON.parse(sessionStorage.getItem('crewready.status') || '{}'); } catch { this.map = {}; } },
+  set(id, v) { this.map[id] = v; try { sessionStorage.setItem('crewready.status', JSON.stringify(this.map)); } catch { /* ignore */ } },
+  clear() { this.map = {}; try { sessionStorage.removeItem('crewready.status'); } catch { /* ignore */ } },
+};
+
+// Console bar: GMT clock (station time), crew, session type
+function updateConsole() {
+  const d = session.data;
+  $('#crewChip').textContent = d ? `${d.pos} · ${d.call}` : '—';
+  $('#sessionChip').textContent = d ? (d.mode === 'crew' ? 'Training' : 'Live') : '—';
+  $('#sessionChip').classList.toggle('crew-t', !!d && d.mode === 'crew');
+}
+function tickClock() {
+  const n = new Date();
+  $('#gmtClock').textContent = `${String(n.getUTCHours()).padStart(2, '0')}:${String(n.getUTCMinutes()).padStart(2, '0')}:${String(n.getUTCSeconds()).padStart(2, '0')}`;
+}
+tickClock(); setInterval(tickClock, 1000);
 
 // =========================================================
 // Router
@@ -209,15 +330,17 @@ const runHash = (step, op = state.op.id) => `#/run/${op}/${step}`;
 
 function onRoute() {
   stopCheck();
+  const v = $('#briefVideo'); if (v && !v.paused) v.pause();
   const r = parseHash();
   if (r.page === 'run') {
+    if (!session.data) { go('#/'); if (intro.done) access.open(); return; }
     const op = opById(r.op);
     if (op !== state.op) resetRun(op);
     if (['results', 'plan'].includes(r.step) && !state.today) { go(runHash('brief')); return; }
   }
   route = r;
   $$('.page').forEach((p) => p.classList.toggle('active', p.dataset.page === r.page));
-  $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === r.page || (r.page === 'run' && a.dataset.nav === 'tasks')));
+  $$('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === r.page || (r.page === 'run' && a.dataset.nav === 'home')));
   closeMenu();
   window.scrollTo(0, 0);
   if (r.page === 'home') renderHome();
@@ -233,15 +356,12 @@ $('#navToggle').addEventListener('click', () => {
 });
 
 // =========================================================
-// Mode
+// Mode (set by the session type)
 // =========================================================
 function setMode(mode) {
   state.mode = mode;
   document.body.classList.toggle('crew', mode === 'crew');
-  $$('.mode-switch [data-mode]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.mode === mode)));
-  try { localStorage.setItem('crewready.mode', mode); } catch { /* ignore */ }
 }
-$$('.mode-switch [data-mode]').forEach((b) => b.addEventListener('click', () => { setMode(b.dataset.mode); resetRun(state.op); renderTasks(); }));
 
 function resetRun(op) {
   state.op = op;
@@ -254,34 +374,44 @@ function resetRun(op) {
 }
 
 // =========================================================
-// Home & Tasks
+// Dashboard & operation briefings
 // =========================================================
+const STATUS_LABEL = { review: ['Review before task', 'st-review'], clear: ['No flagged changes', 'st-clear'], forming: ['Baseline forming', 'st-forming'], retry: ['Repeat check', 'st-retry'] };
 function renderHome() {
-  const strip = $('#homeTasks');
-  if (strip.childElementCount) return;
-  strip.innerHTML = OPS.map((o) => `
-    <a class="strip-card" href="${runHash('brief', o.id)}" data-start="${o.id}">
-      <img src="assets/img/${o.img}" alt=""><span>${esc(o.short)}<small>${esc(o.skill)}</small></span>
-    </a>`).join('');
+  $('#opsTable').innerHTML = OPS.map((o, i) => {
+    const st = STATUS_LABEL[status.map[o.id]] || ['Not assessed', 'st-none'];
+    return `
+    <article class="op-row">
+      <span class="op-idx">${String(i + 1).padStart(2, '0')}</span>
+      <img class="op-thumb" src="assets/img/${o.img}" alt="">
+      <div class="op-info">
+        <h3>${esc(o.name)}</h3>
+        <p><span class="op-skill">${esc(o.skill)}</span> · Critical step: ${esc(o.step)}</p>
+      </div>
+      <span class="op-status ${st[1]}">${st[0]}</span>
+      <a class="btn btn-primary btn-sm" href="${runHash('brief', o.id)}" data-start="${o.id}">Assess</a>
+    </article>`;
+  }).join('');
 }
 
 function renderTasks() {
   $('#taskGrid').innerHTML = OPS.map((o) => `
     <article class="task-card">
       <div class="task-card-img">
-        <img src="assets/img/${o.img}" alt="${esc(o.name)}" loading="lazy">
+        <img src="${NASA_ASSET(o.nasa.id, o.nasa.poster)}" alt="${esc(o.nasa.title)}" loading="lazy" onerror="this.src='assets/img/${o.img}'">
         <span class="chip">${esc(o.skill)}</span>
+        <span class="play-badge">▶ NASA footage</span>
       </div>
       <div class="task-card-body">
         <h3>${esc(o.name)}</h3>
         <p>${esc(o.detail)}</p>
-        <p class="crit"><span>Mission check</span><b>${esc(o.title)}</b></p>
+        <p class="crit"><span>Check</span><b>${esc(o.title)}</b></p>
         <p class="crit"><span>Critical step</span><b>${esc(o.step)}</b></p>
-        <a class="btn btn-primary" href="${runHash('brief', o.id)}" data-start="${o.id}">Start mission check</a>
+        <a class="btn btn-primary" href="${runHash('brief', o.id)}" data-start="${o.id}">Open briefing</a>
       </div>
     </article>`).join('');
 }
-// starting a mission from a card always starts a fresh run
+// starting an operation from a card always starts a fresh run
 document.addEventListener('click', (e) => {
   const a = e.target.closest('[data-start]');
   if (a) resetRun(opById(a.dataset.start));
@@ -298,7 +428,7 @@ function showStep(step) {
   });
   $$('.pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === step));
   const chip = $('#runMode');
-  chip.textContent = state.mode === 'crew' ? 'Crew scenario · simulated history' : 'Live test';
+  chip.textContent = state.mode === 'crew' ? 'Training scenario · simulated history' : 'Live assessment';
   chip.className = `chip${state.mode === 'crew' ? ' crew' : ''}`;
   if (step === 'brief') renderBrief();
   if (step === 'check') startCheckPane();
@@ -308,13 +438,22 @@ function showStep(step) {
 
 // ---------- Brief ----------
 function renderBrief() {
-  const o = state.op;
-  $('#briefImg').src = `assets/img/${o.img}`;
-  $('#briefImg').alt = o.name;
-  $('#briefKicker').textContent = `Upcoming mission · ${o.skill}`;
+  const o = state.op, n = o.nasa;
+  $('#briefKicker').textContent = `Operation briefing · ${o.skill}`;
   $('#briefName').textContent = o.name;
   $('#briefDetail').textContent = o.detail;
   $('#briefStep').textContent = o.step;
+  $('#briefCheck').textContent = o.title;
+  $('#briefPartner').textContent = cap(o.partner);
+  $('#briefWhy').textContent = o.why;
+  const v = $('#briefVideo');
+  const src = NASA_ASSET(n.id, n.video);
+  if (v.dataset.src !== src) { v.dataset.src = src; v.poster = NASA_ASSET(n.id, n.poster); v.src = src; }
+  $('#briefQuote').textContent = `“${n.quote}”`;
+  const qs = n.quoteSrc
+    ? ` Quote: <a href="${NASA_PAGE(n.quoteSrc.id)}" target="_blank" rel="noopener">${esc(n.quoteSrc.title)}</a>.`
+    : '';
+  $('#briefSrc').innerHTML = `Source: <a href="${NASA_PAGE(n.id)}" target="_blank" rel="noopener">${esc(n.title)}</a>, ${esc(n.date)} · NASA Image and Video Library.${qs}`;
   $('#sleepH').value = Math.floor(state.pendingSleep / 60);
   $('#sleepM').value = state.pendingSleep % 60;
   renderSleepiness();
@@ -1161,8 +1300,8 @@ function renderResults() {
   const v = $('#verdict');
   const ev = state.evaluation = evaluate(t, b);
   $('#resBanner').textContent = t.recorded
-    ? 'Simulated crew data: five previous checks and today\'s recorded check'
-    : 'Your check today, compared with a simulated crew member\'s five previous checks';
+    ? 'Training scenario: simulated crew history and today\'s recorded check'
+    : 'Training scenario: your check today against a simulated five-check crew history';
 
   if (!t.valid) {
     v.className = 'verdict retry';
@@ -1201,6 +1340,7 @@ function renderResults() {
   t.extras.forEach(([label, val, bad]) => { html += row(esc(label), esc(val), dash, dash, false).replace('<td>' + esc(val), `<td class="${bad ? 'delta-bad' : ''}">` + esc(val)); });
   $('#compareBody').innerHTML = html;
 
+  status.set(o.id, !t.valid ? 'retry' : !b ? 'forming' : ev.flag ? 'review' : 'clear');
   $('#baselineHelp').hidden = !(t.valid && !b && state.mode === 'guest');
   const rule = $('#rulePanel');
   if (ev) {
@@ -1265,11 +1405,12 @@ function renderPlan() {
 function renderSummary() {
   const t = state.today, b = state.baseline, ev = state.evaluation, o = state.op, m = o.metric;
   const L = [];
-  L.push('CrewReady: pre-task check');
-  L.push(`Mission: ${o.name}`);
+  L.push('CrewReady: pre-task readiness assessment');
+  if (session.data) L.push(`Crew: ${session.data.pos} ${session.data.call} · ${new Date().toISOString().slice(0, 16).replace('T', ' ')} GMT`);
+  L.push(`Operation: ${o.name}`);
   L.push(`Critical step: ${o.step}`);
   L.push(`Check: ${o.title} (${o.skill})`);
-  L.push(`Profile: ${state.mode === 'crew' ? (t && t.recorded ? 'Crew member A, recorded check (simulated)' : 'Live check vs simulated crew history') : 'Live check'}${state.baselineSimulated && state.mode === 'guest' ? ', simulated baseline' : ''}`);
+  L.push(`Session: ${state.mode === 'crew' ? (t && t.recorded ? 'training scenario, recorded check (simulated)' : 'training scenario, live check vs simulated history') : 'live assessment'}${state.baselineSimulated && state.mode === 'guest' ? ', simulated baseline' : ''}`);
   if (t) {
     L.push(`Sleep: ${fmtSleep(t.sleep)}${b ? ` (usual ${fmtSleep(b.sleep)})` : ''}`);
     L.push(`Sleepiness: ${t.sleepy}/5${b ? ` (usual ${b.sleepy}/5)` : ''}`);
@@ -1320,13 +1461,16 @@ window.addEventListener('blur', () => {
 // Boot
 // =========================================================
 (function boot() {
-  let mode = 'guest';
-  try { mode = localStorage.getItem('crewready.mode') || 'guest'; } catch { /* ignore */ }
-  setMode(mode === 'crew' ? 'crew' : 'guest');
+  session.load();
+  status.load();
+  setMode(session.data ? session.data.mode : 'guest');
   resetRun(state.op);
-  onRoute();
+  updateConsole();
   let seen = false;
   try { seen = sessionStorage.getItem('crewready.introSeen') === '1'; } catch { /* ignore */ }
-  if (seen || location.hash.length > 2) { intro.el.hidden = true; intro.done = true; }
-  else intro.open();
+  const skipIntro = seen || location.hash.length > 2;
+  if (skipIntro) { intro.el.hidden = true; intro.done = true; }
+  onRoute();
+  if (!skipIntro) intro.open();
+  else if (!session.data) access.open();
 })();

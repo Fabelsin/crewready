@@ -53,6 +53,17 @@ python3 -m http.server 8765
 | Правило карточки | `RULE` |
 | Подсказки для договорённости с напарником | `agreementText()` |
 
+## Сеанс экипажа
+
+После интро открывается вход: позиция экипажа (CDR / FE-1…FE-3), позывной и тип сеанса (Live assessment или Training scenario). В шапке — время GMT, позывной и тип сеанса, кнопка End session. Аутентификации нет: прототип, данные остаются в браузере.
+
+## Брифинг миссии
+
+Для каждой операции — официальное видео NASA (стримится с images-assets.nasa.gov), цитата из описания NASA со ссылкой на первоисточник и объяснение, зачем нужна именно эта проверка.
+
 ## Медиа
 
-Фото и видео — NASA (images.nasa.gov): Earth Views from the ISS (NHQ_2020_1221), ISS037/043/065/072/073. Используются по правилам NASA для медиа; NASA не поддерживает и не одобряет проект. Логотип NASA не используется — у проекта своя эмблема (`assets/img/emblem.svg`).
+- Интро: NASA «4K Earth Views» (jsc2021m000138), фрагмент 14 с, 1080p.
+- Фото: NASA (images.nasa.gov) — ISS037/043/065/072/073.
+- Видео брифингов: NHQ_2020_1005 (Cygnus), jsc2020m000166 (Demo-2 docking), jsc2022m000280 (EVA 82 iROSA), 318_ECLSSWaterRec, Saffire-VI, HumanHealth + KSC-04-S-00090, 282_ThinkingInsideBox.
+- Логотипы NASA и NASA International Space Apps Challenge (Wikimedia Commons, из бренд-архива Space Apps) показаны, чтобы обозначить хакатон; NASA не поддерживает и не одобряет проект.
