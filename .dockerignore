@@ -1,0 +1,7 @@
+.git
+.agents
+node_modules
+dist
+tests
+docs
+*.log

@@ -1,0 +1,10 @@
+* text=auto
+public/models/* -text
+public/vendor/three/** -text whitespace=-space-before-tab
+public/models/*.md text eol=lf
+public/models/*.txt text eol=lf
+public/vendor/three/*.md text eol=lf
+*.wasm binary
+*.task binary
+*.glb binary
+*.mp4 binary

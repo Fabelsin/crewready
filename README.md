@@ -1,13 +1,43 @@
 # CrewReady — прототип для NASA Space Apps 2026
 
+## MoveCheck integration (current)
+
+Branch `codex/movecheck-exercise-pool` is based on upstream `fe74ad9`, including the crew console, seven 3D scenes, reworked missions 5–7 (`42edd9c`) and task-indicator panels (`fe74ad9`). MoveCheck adds an optional movement break after the cognitive check: **two different movements from a pool of three** (squat, overhead reach, T-pose arm open), three repetitions each. Defaults rotate across assessments; each movement and each new assessment starts with fresh counters.
+
+```bash
+docker compose up -d --build
+# open http://localhost:8765/
+```
+
+Do not double-click `index.html`; modules and camera assets need HTTP on localhost or HTTPS. Stop with `docker compose down`. Rebuild after source edits with the same `up -d --build` command. The app remains a static vanilla site; the Docker build validates assets and packages `dist/`, then Nginx serves the complete output.
+
+```bash
+npm ci
+npm test
+npx tsc --noEmit
+npm run build
+npm run test:browser
+# optional after starting Docker:
+node scripts/docker-smoke.js
+```
+
+MediaPipe SDK/WASM/model and Three.js runtime/addons are self-hosted under `public/`; no CDN or Google Font is needed. The core workflow is tested with non-loopback requests blocked. NASA source links and briefing videos remain available online through an explicit **Load NASA briefing video** action. No webcam pixels or landmarks leave the device. This is a locally served offline demo, not a cold-start PWA.
+
+Results preserve the seven task metrics and the latest task-indicator bars with clearly labeled demo references. Cognitive and movement observations are separate; no synthetic medical/readiness score or automatic task clearance is produced. The optional break does not establish an improvement in alertness. Movement estimates are for Earth training, with separate validation/equipment needed onboard.
+
+See [session schema 2](docs/SESSION_SCHEMA.md), [demo script](docs/DEMO_SCRIPT.md), [MediaPipe asset provenance](public/models/ASSET_MANIFEST.md), and [Three.js asset provenance](public/vendor/three/ASSET_MANIFEST.md). New sessions use `crewready.v5.sessions` and a browser-local crew profile. Old v3/v4 records remain untouched and are not assigned invented crew/routine context. TypeScript checks the new movement/session/Worker modules; legacy `app.js` and `scene3d.js` are syntax/browser checked. Full movement cycles use synthetic fixtures; real MediaPipe is separately tested on a fake browser camera. Human webcam accuracy remains unvalidated.
+
+## Original mission notes
+
 Проверка готовности экипажа МКС перед критической операцией: сон и сонливость → **проверка, своя для каждой миссии** → сравнение «Сегодня / Обычно» с личным baseline этой миссии → договорённость с напарником.
 
 ## Запуск
 
-Статический сайт без сборки. Открыть `index.html` в браузере или запустить локальный сервер:
+Статический сайт. Используйте Docker выше или соберите и запустите HTTP-сервер; не открывайте `index.html` через `file://`:
 
 ```bash
-python3 -m http.server 8765
+npm run build
+python3 -m http.server 8765 --directory dist
 # http://localhost:8765
 ```
 
@@ -19,7 +49,7 @@ python3 -m http.server 8765
 | `#/` | Главная: назначение, проблема, 4 шага, научная основа, список миссий |
 | `#/tasks` | Выбор миссии и режима (Live test / Crew scenario) |
 | `#/about` | Методика, правило карточки, режимы, источники изображений |
-| `#/run/<mission>/<step>` | Прохождение: `brief` → `check` → `results` → `plan` |
+| `#/run/<mission>/<step>` | Прохождение: `brief` → `check` → optional `movement` → `results` → `plan` |
 
 ## Семь миссий — семь разных проверок
 
@@ -59,7 +89,7 @@ python3 -m http.server 8765
 
 ## Брифинг миссии
 
-Для каждой операции — официальное видео NASA (стримится с images-assets.nasa.gov), цитата из описания NASA со ссылкой на первоисточник и объяснение, зачем нужна именно эта проверка.
+Для каждой операции — официальное видео NASA (загружается с images-assets.nasa.gov по отдельной кнопке), цитата из описания NASA со ссылкой на первоисточник и объяснение, зачем нужна именно эта проверка.
 
 ## Медиа
 

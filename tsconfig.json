@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "WebWorker"],
+    "skipLibCheck": true,
+    "strict": false
+  },
+  "include": ["session.js", "movement-math.js", "movement.js", "pose-worker.js"],
+  "exclude": ["public/models", "node_modules", "dist"]
+}

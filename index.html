@@ -6,18 +6,18 @@
 <title>CrewReady — Pre-task readiness for ISS crew operations</title>
 <meta name="description" content="CrewReady: a pre-task readiness assessment for ISS crew operations. NASA International Space Apps Challenge 2026 prototype.">
 <link rel="icon" href="assets/img/emblem.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  "three": "./public/vendor/three/three.module.js",
+  "three/addons/": "./public/vendor/three/addons/"
 } }
 </script>
 </head>
 <body>
+<div id="fileWarning" class="file-warning" role="alert" hidden>
+  This file needs the local server. Open <a href="http://localhost:8765/">http://localhost:8765/</a> after running <code>docker compose up -d --build</code> in the CrewReady folder.
+</div>
 
 <!-- ============================ INTRO ============================ -->
 <div id="intro" class="intro" role="dialog" aria-label="CrewReady intro">
@@ -71,7 +71,7 @@
     </div>
 
     <button class="btn btn-primary btn-lg access-go" type="submit">Open session</button>
-    <p class="access-note">Prototype: no authentication. Data never leaves this browser.</p>
+    <p class="access-note">Prototype: no authentication. Camera and check observations stay in this browser. NASA videos load online only when requested.</p>
   </form>
 </div>
 
@@ -106,13 +106,13 @@
       <div class="dash-hero-shade"></div>
       <div class="wrap dash-hero-content">
         <p class="kicker">Pre-task readiness · ISS operations</p>
-        <h1 class="display">Know your readiness<br>before the critical step.</h1>
-        <p class="lead">CrewReady is a two-minute assessment taken right before a high-risk operation. Each operation has its own check that exercises the skill its critical step depends on. Your result is compared with your own baseline, and you get one concrete cross-check to agree with your partner.</p>
+        <h1 class="display">Check your attention<br>before the critical step.</h1>
+        <p class="lead">Seven operation-specific checks, followed by an optional local movement break. Cognitive and movement observations stay separate; the crew agrees its own cross-check.</p>
         <div class="hero-stats">
           <div><b>7</b><span>operations</span></div>
           <div><b>7</b><span>task-specific checks</span></div>
-          <div><b>≈2 min</b><span>per assessment</span></div>
-          <div><b>0</b><span>data sent off device</span></div>
+          <div><b>3</b><span>movement options</span></div>
+          <div><b>0</b><span>camera frames transmitted</span></div>
         </div>
       </div>
       <p class="hero-credit">Image: NASA — Cygnus capture by Canadarm2 (ISS037)</p>
@@ -136,13 +136,14 @@
           <ol class="flow-list">
             <li><b>Brief</b><span>Operation context from NASA, sleep and sleepiness</span></li>
             <li><b>Check</b><span>Task-specific interactive check, 30–75 s</span></li>
-            <li><b>Compare</b><span>Today against your median of the last five checks</span></li>
+            <li><b>MoveCheck · optional</b><span>Two different movements from a rotating pool</span></li>
+            <li><b>Observe</b><span>Cognitive and movement measurements with separate recent references</span></li>
             <li><b>Agree</b><span>One cross-check for the critical step with your partner</span></li>
           </ol>
         </div>
         <div class="side-card">
           <p class="kicker">Review rule</p>
-          <p class="small">The result is flagged <b class="warn-t">Review before task</b> when the operation metric is at least <b>20%</b> worse than usual <b>and</b> sleep is at least <b>2 h</b> shorter <b>or</b> sleepiness is <b>4–5 / 5</b>.</p>
+          <p class="small">The illustrative review rule is: operation metric at least <b>20%</b> worse <b>AND</b> (sleep at least <b>2 h</b> shorter <b>OR</b> sleepiness <b>4–5 / 5</b>).</p>
           <p class="muted tiny">Demonstration thresholds, not clinical limits. The crew makes every decision.</p>
         </div>
       </aside>
@@ -238,8 +239,9 @@
       <ol class="stepper" id="stepper">
         <li data-step="brief"><span>1</span>Brief</li>
         <li data-step="check"><span>2</span>Check</li>
-        <li data-step="results"><span>3</span>Compare</li>
-        <li data-step="plan"><span>4</span>Agree</li>
+        <li data-step="movement"><span>3</span>MoveCheck · optional</li>
+        <li data-step="results"><span>4</span>Observations</li>
+        <li data-step="plan"><span>5</span>Agree</li>
       </ol>
 
       <!-- BRIEF -->
@@ -264,6 +266,7 @@
             <div class="video-box">
               <video id="briefVideo" controls preload="none" playsinline></video>
             </div>
+            <button class="btn btn-outline" id="btnLoadBriefVideo" type="button">Load NASA briefing video · online</button>
             <figcaption>
               <blockquote id="briefQuote"></blockquote>
               <p class="src" id="briefSrc"></p>
@@ -304,9 +307,46 @@
         </div>
       </div>
 
+      <!-- OPTIONAL MOVEMENT -->
+      <div class="pane" data-pane="movement">
+        <h2 class="h2">MoveCheck · optional movement break</h2>
+        <p class="muted">Two short movements are selected from a pool of three for this session. You can change the current movement, skip one, or skip the whole break. This is an Earth training demonstration; onboard exercise requires separate anchored or resistive equipment and validation.</p>
+        <div id="moveProgress" class="move-progress" aria-live="polite"></div>
+        <div id="movePlan" class="move-plan"></div>
+        <h3 class="h3">Choose the current movement</h3>
+        <div id="exercisePool" class="move-pool" role="radiogroup" aria-label="Current movement"></div>
+        <section class="move-guide" aria-labelledby="moveGuideTitle">
+          <h3 id="moveGuideTitle">What to do in front of the camera</h3>
+          <ol>
+            <li><strong>Frame the camera.</strong> <span id="moveSetup"></span></li>
+            <li><strong>Calibrate.</strong> Select <b>Enable camera &amp; start</b>, then hold the starting pose until the status says <b>Standing</b> or <b>Ready</b>.</li>
+            <li><strong>Repeat the movement.</strong> <span id="moveAction"></span></li>
+          </ol>
+          <p>A repetition counts only after the full return to the starting pose. If tracking is lost, the unfinished repetition is cleared. Webcam angles are approximate observations, not a form or medical score.</p>
+        </section>
+        <p class="privacy-note">Camera frames are processed only on this device. No video, images, or landmarks are transmitted or saved. Only compact movement measurements enter browser-local history.</p>
+        <div class="move-grid">
+          <div class="move-viewport"><video id="moveVideo" autoplay muted playsinline></video><canvas id="moveCanvas" aria-hidden="true"></canvas></div>
+          <div class="move-readout">
+            <p id="moveStatus" role="status" aria-live="polite">Camera off. Choose a movement and follow the steps above.</p>
+            <dl><div><dt>Completed reps</dt><dd id="moveReps">0 / 3</dd></div><div><dt id="moveAngleLabel">Estimated angle</dt><dd id="moveAngle">—</dd></div><div><dt>Tracked time</dt><dd id="moveTime">0.0 s tracked</dd></div></dl>
+            <p class="muted small">Tracking quality only reflects landmark visibility. Incomplete cycles and time out of frame are excluded from repetition timing.</p>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" id="btnMoveEnable">Enable camera &amp; start</button>
+          <button class="btn btn-outline" id="btnMoveStop">Stop</button>
+          <button class="btn btn-outline" id="btnMoveRetry">Retry</button>
+          <button class="btn btn-ghost" id="btnMoveNext">Skip this movement</button>
+          <button class="btn btn-ghost" id="btnMoveSkip">Skip all movement</button>
+          <button class="btn btn-outline" id="btnMoveContinue">Finish break &amp; see observations</button>
+        </div>
+      </div>
+
       <!-- RESULTS -->
       <div class="pane" data-pane="results">
         <div class="sim-banner" data-crew-only id="resBanner"></div>
+        <h2 class="h2">Cognitive observations</h2>
         <div id="verdict" class="verdict"></div>
         <section id="indPanel" class="ind-panel" hidden aria-label="Readiness indicators"></section>
         <div class="table-wrap">
@@ -320,8 +360,12 @@
           <button class="btn btn-outline" id="btnDemoBaseline">Use simulated baseline</button>
         </div>
         <div id="rulePanel" class="rule-panel" hidden></div>
+        <section class="movement-results"><h3 class="h3">Movement observations</h3><div id="movementResult"></div><div id="movementBaseline"></div></section>
+        <section><h3 class="h3">Context &amp; local storage</h3><p id="storageStatus" class="muted small"></p></section>
         <div class="actions">
           <button class="btn btn-ghost" id="btnRepeat">Repeat check</button>
+          <button class="btn btn-ghost" id="btnClearHistory">Clear local session history</button>
+          <button class="btn btn-outline" id="btnExportSession">Export session JSON</button>
           <button class="btn btn-primary" id="btnToPlan">Agree with partner</button>
         </div>
       </div>
@@ -362,6 +406,7 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script src="scene3d.js"></script>
-<script src="app.js"></script>
+<script>if (location.protocol === 'file:') document.getElementById('fileWarning').hidden = false;</script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

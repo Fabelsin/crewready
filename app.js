@@ -1,4 +1,6 @@
-'use strict';
+import {newSession, readSessions, upsertSession, clearSessions, cognitiveReferences, movementReferences, cognitiveRule} from './session.js';
+import {MovementController} from './movement.js';
+import {EXERCISES, EXERCISE_ORDER, ROUTINE_LENGTH, planRoutine, emptyAttempt} from './movement-math.js';
 
 /* =========================================================
    CrewReady — NASA Space Apps 2026 prototype
@@ -13,7 +15,7 @@ const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 const BASELINE_N = 5;                                  // baseline = median of the last 5 checks of a mission
 const RULE = { worse: 0.20, sleepLostMin: 120, sleepy: 4 };
 const STORAGE_PREFIX = 'crewready.v3.hist.';
-const STEPS = ['brief', 'check', 'results', 'plan'];
+const STEPS = ['brief', 'check', 'movement', 'results', 'plan'];
 const CREW_SLEEP = { base: [445, 430, 440, 450, 440], baseSleepy: [2, 2, 2, 1, 2], today: 310, todaySleepy: 4 };
 
 const fmtMs = (v) => `${Math.round(v)} ms`;
@@ -168,6 +170,12 @@ const state = {
   baselineCount: 0,
   baselineSimulated: false,
   evaluation: null,
+  session: null,
+  moveIndex: 0,
+  storageWarning: null,
+  historyCleared: false,
+  checkStartedAt: null,
+  pendingRouteTimer: null,
 };
 
 // ---------- Helpers ----------
@@ -191,10 +199,20 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function loadHistory(op) {
-  try { return JSON.parse(localStorage.getItem(STORAGE_PREFIX + op.id) || '[]'); } catch { return []; }
+  const loaded = readSessions();
+  state.storageWarning = loaded.warning;
+  return cognitiveReferences(op.id, profileScope(), loaded.rows);
 }
-function saveHistory(op, h) {
-  try { localStorage.setItem(STORAGE_PREFIX + op.id, JSON.stringify(h.slice(-30))); } catch { /* storage unavailable */ }
+function profileScope() {
+  const d = session.data;
+  return d ? `${d.mode === 'crew' ? 'scenario' : 'local'}:${d.pos}:${d.call}`.slice(0, 48) : 'local:unassigned';
+}
+function saveCurrent() {
+  if (!state.session) return;
+  if (state.historyCleared) { state.session.syncStatus = {state: 'not-saved', at: new Date().toISOString(), reason: 'Local history cleared by user.'}; return; }
+  const saved = upsertSession(state.session);
+  if (saved.ok) state.session = saved.session;
+  if (!saved.ok) { state.storageWarning = saved.reason; state.session.syncStatus = {state: 'not-saved', at: new Date().toISOString(), reason: saved.reason}; }
 }
 
 function toast(msg) {
@@ -329,14 +347,20 @@ const go = (hash) => { if (location.hash === hash) onRoute(); else location.hash
 const runHash = (step, op = state.op.id) => `#/run/${op}/${step}`;
 
 function onRoute() {
+  clearTimeout(state.pendingRouteTimer);
   stopCheck();
   const v = $('#briefVideo'); if (v && !v.paused) v.pause();
   const r = parseHash();
+  if (route.page === 'run' && route.step === 'movement' && (r.page !== 'run' || r.step !== 'movement' || r.op !== route.op)) leaveMovement();
   if (r.page === 'run') {
     if (!session.data) { go('#/'); if (intro.done) access.open(); return; }
     const op = opById(r.op);
     if (op !== state.op) resetRun(op);
-    if (['results', 'plan'].includes(r.step) && !state.today) { go(runHash('brief')); return; }
+    else if (r.step === 'check' && state.today) {
+      const sleep = state.pendingSleep, sleepy = state.sleepy;
+      resetRun(op); state.pendingSleep = sleep; state.sleepy = sleepy;
+    }
+    if (['movement', 'results', 'plan'].includes(r.step) && !state.today) { go(runHash('brief')); return; }
   }
   route = r;
   $$('.page').forEach((p) => p.classList.toggle('active', p.dataset.page === r.page));
@@ -364,11 +388,21 @@ function setMode(mode) {
 }
 
 function resetRun(op) {
+  clearTimeout(state.pendingRouteTimer);
+  leaveMovement();
   state.op = op;
   state.today = null;
   state.evaluation = null;
   state.baseline = null;
   state.baselineSimulated = false;
+  state.baselineCount = 0;
+  state.storageWarning = null;
+  state.historyCleared = false;
+  const scope = profileScope();
+  const previous = readSessions().rows.filter(s => s.context.profileScope === scope).at(-1);
+  const start = previous ? EXERCISE_ORDER.indexOf(previous.movementResults.plan[0]) + 1 : OPS.indexOf(op);
+  state.session = newSession(op.id, scope, planRoutine(start, 0));
+  state.moveIndex = 0;
   if (state.mode === 'crew') { state.pendingSleep = CREW_SLEEP.today; state.sleepy = CREW_SLEEP.todaySleepy; }
   else { state.pendingSleep = 420; state.sleepy = 2; }
 }
@@ -398,7 +432,7 @@ function renderTasks() {
   $('#taskGrid').innerHTML = OPS.map((o) => `
     <article class="task-card">
       <div class="task-card-img">
-        <img src="${NASA_ASSET(o.nasa.id, o.nasa.poster)}" alt="${esc(o.nasa.title)}" loading="lazy" onerror="this.src='assets/img/${o.img}'">
+        <img src="assets/img/${o.img}" alt="${esc(o.nasa.title)}" loading="lazy">
         <span class="chip">${esc(o.skill)}</span>
         <span class="play-badge">▶ NASA footage</span>
       </div>
@@ -432,6 +466,7 @@ function showStep(step) {
   chip.className = `chip${state.mode === 'crew' ? ' crew' : ''}`;
   if (step === 'brief') renderBrief();
   if (step === 'check') startCheckPane();
+  if (step === 'movement') renderMovement();
   if (step === 'results') renderResults();
   if (step === 'plan') renderPlan();
 }
@@ -448,7 +483,8 @@ function renderBrief() {
   $('#briefWhy').textContent = o.why;
   const v = $('#briefVideo');
   const src = NASA_ASSET(n.id, n.video);
-  if (v.dataset.src !== src) { v.dataset.src = src; v.poster = NASA_ASSET(n.id, n.poster); v.src = src; }
+  if (v.dataset.src !== src) { v.pause(); v.removeAttribute('src'); v.load(); v.dataset.src = src; v.poster = `assets/img/${o.img}`; }
+  $('#btnLoadBriefVideo').hidden = false;
   $('#briefQuote').textContent = `“${n.quote}”`;
   const qs = n.quoteSrc
     ? ` Quote: <a href="${NASA_PAGE(n.quoteSrc.id)}" target="_blank" rel="noopener">${esc(n.quoteSrc.title)}</a>.`
@@ -459,6 +495,13 @@ function renderBrief() {
   renderSleepiness();
   $('#btnStartCheck').textContent = `Start check: ${o.title}`;
 }
+
+$('#btnLoadBriefVideo').addEventListener('click', () => {
+  const video = $('#briefVideo');
+  video.src = video.dataset.src;
+  video.load(); video.play().catch(() => toast('NASA video is unavailable offline. The mission check still works.'));
+  $('#btnLoadBriefVideo').hidden = true;
+});
 
 function renderSleepiness() {
   const seg = $('#sleepiness');
@@ -475,6 +518,7 @@ function renderSleepiness() {
 }
 
 function readSleep() {
+  if ($('#sleepH').value.trim() === '' || $('#sleepM').value.trim() === '') return null;
   const h = clamp(parseInt($('#sleepH').value, 10) || 0, 0, 14);
   const m = clamp(parseInt($('#sleepM').value, 10) || 0, 0, 59);
   $('#sleepH').value = h; $('#sleepM').value = m;
@@ -482,18 +526,21 @@ function readSleep() {
 }
 
 $('#btnStartCheck').addEventListener('click', () => {
-  state.pendingSleep = readSleep();
+  const sleep = readSleep(); if (sleep === null) { toast('Enter hours and minutes of sleep.'); return; }
+  state.pendingSleep = sleep;
   go(runHash('check'));
 });
 $('#btnLoadRecorded').addEventListener('click', () => {
-  state.pendingSleep = readSleep();
+  const sleep = readSleep(); if (sleep === null) { toast('Enter hours and minutes of sleep.'); return; }
+  state.pendingSleep = sleep;
   const c = state.op.crew;
   state.today = {
     metric: c.today, valid: true, extras: c.extras.map(([l, v, b]) => [l, v, b]), flags: { ...c.flags },
     sleep: state.pendingSleep, sleepy: state.sleepy, recorded: true,
   };
   useSimulatedBaseline();
-  go(runHash('results'));
+  commitCognitive(state.today, 'simulated');
+  go(runHash('movement'));
 });
 
 // =========================================================
@@ -502,6 +549,7 @@ $('#btnLoadRecorded').addEventListener('click', () => {
 const chk = { current: null };
 
 function startCheckPane() {
+  state.checkStartedAt = new Date().toISOString();
   const o = state.op;
   $('#chkTitle').textContent = o.title;
   $('#chkSkill').textContent = o.skill;
@@ -515,22 +563,158 @@ function startCheckPane() {
 function stopCheck() { if (chk.current) { chk.current.stop(); chk.current = null; } }
 
 function finishCheck(result) {
+  if (route.page !== 'run' || route.step !== 'check' || state.today) return;
   stopCheck();
   const o = state.op;
-  state.today = { ...result, sleep: state.pendingSleep, sleepy: state.sleepy, recorded: false };
+  state.today = { ...result, valid: !!result.valid && Number.isFinite(result.metric), metric: Number.isFinite(result.metric) ? result.metric : null, sleep: state.pendingSleep, sleepy: state.sleepy, recorded: false };
   if (state.mode === 'crew') {
     useSimulatedBaseline();
   } else {
     const history = loadHistory(o);
     computeBaseline(history);
     state.baselineSimulated = false;
-    if (result.valid) {
-      history.push({ metric: result.metric, sleep: state.pendingSleep, sleepy: state.sleepy, date: new Date().toISOString() });
-      saveHistory(o, history);
-    }
   }
-  setTimeout(() => go(runHash('results')), 900);
+  commitCognitive(state.today, 'live');
+  const sessionId = state.session.context.sessionId;
+  state.pendingRouteTimer = setTimeout(() => {
+    if (state.session?.context.sessionId === sessionId && parseHash().step === 'check') go(runHash('movement'));
+  }, 900);
 }
+
+const metricUnits = {cygnus: 'ms', docking: 'ms', solar: 'percent-of-scale', water: 'ms', drill: 'ms', ultrasound: 'percent', experiment: 'percent'};
+function commitCognitive(today, source) {
+  const s = state.session;
+  s.checkIn = {sleepMinutes: today.sleep, sleepiness: today.sleepy, at: new Date().toISOString()};
+  s.cognitiveResults = {
+    checkId: state.op.check, version: ['drill', 'ultrasound', 'experiment'].includes(state.op.id) ? 2 : 1,
+    metric: {id: state.op.id, value: Number.isFinite(today.metric) ? today.metric : null, unit: metricUnits[state.op.id], direction: state.op.metric.better},
+    valid: !!today.valid, reason: today.valid ? null : 'Check incomplete', source,
+    extras: today.extras.slice(0, 20).map(([label, value, flag]) => ({label: String(label).slice(0, 80), value: typeof value === 'number' && Number.isFinite(value) ? value : String(value).slice(0, 80), flag: !!flag})),
+    flags: Object.fromEntries(Object.entries(today.flags || {}).slice(0, 20).filter(([,v]) => Number.isFinite(v))),
+    startedAt: state.checkStartedAt || new Date().toISOString(), completedAt: new Date().toISOString(),
+  };
+  s.context.baseline.cognitive = state.baselineSimulated ? 'simulated-fixture' : state.baseline ? 'local-recent' : 'forming';
+  saveCurrent();
+}
+
+// Camera lifecycle is independent of the seven mission-check controllers.
+const move = new MovementController({
+  video: $('#moveVideo'), canvas: $('#moveCanvas'), status: $('#moveStatus'), reps: $('#moveReps'), angle: $('#moveAngle'), time: $('#moveTime'),
+}, result => {
+  recordMovementAttempt(result);
+  advanceMovement();
+}, reason => {
+  recordMovementAttempt(emptyAttempt(currentExercise(), 'unavailable', reason.slice(0, 200)));
+});
+function currentExercise() {
+  const plan = state.session.movementResults.plan;
+  return plan[Math.min(state.moveIndex, plan.length - 1)];
+}
+function movementStatus() {
+  const m = state.session.movementResults;
+  const completed = m.attempts.filter(a => a.status === 'completed').length;
+  if (m.attempts.length === m.plan.length) {
+    m.status = completed === m.plan.length ? 'completed' : completed ? 'partial' : m.attempts.every(a => a.status === 'skipped') ? 'skipped' : m.attempts.some(a => a.status === 'unavailable') ? 'unavailable' : 'aborted';
+  } else m.status = completed ? 'partial' : m.attempts.at(-1)?.status === 'unavailable' ? 'unavailable' : m.attempts.at(-1)?.status === 'aborted' ? 'aborted' : 'not-started';
+}
+function recordMovementAttempt(result) {
+  if (!state.session || state.moveIndex >= ROUTINE_LENGTH) return;
+  state.session.movementResults.attempts[state.moveIndex] = result;
+  movementStatus();
+  saveCurrent();
+}
+function advanceMovement() {
+  state.moveIndex++;
+  movementStatus();
+  saveCurrent();
+  if (state.moveIndex >= ROUTINE_LENGTH) go(runHash('results'));
+  else {
+    renderMovement();
+    move.status('idle', `Movement ${state.moveIndex} saved. Reposition for ${EXERCISES[currentExercise()].name}, then enable the camera again.`);
+  }
+}
+function leaveMovement() {
+  if (!move) return;
+  const partial = move.stop(true);
+  if (partial) recordMovementAttempt({...partial, status: 'aborted', reason: 'Movement interrupted before completion.'});
+}
+function renderMovement() {
+  if (move.active) return;
+  const m = state.session.movementResults, finished = state.moveIndex >= m.plan.length;
+  const id = currentExercise(), cfg = EXERCISES[id], attempt = finished ? m.attempts.at(-1) : m.attempts[state.moveIndex];
+  $('#moveProgress').textContent = finished ? 'Movement break finished' : `Movement ${state.moveIndex + 1} of ${m.plan.length} · ${cfg.name} · ${cfg.targetReps} repetitions`;
+  $('#movePlan').textContent = m.plan.map((exercise, i) => `${i + 1}. ${EXERCISES[exercise].name}${m.attempts[i] ? ` (${m.attempts[i].status})` : ''}`).join(' → ');
+  const used = m.plan.slice(0, state.moveIndex);
+  $('#exercisePool').innerHTML = EXERCISE_ORDER.map(exercise => `<button type="button" class="move-choice" role="radio" aria-checked="${exercise === id}" tabindex="${exercise === id ? 0 : -1}" data-exercise="${exercise}" ${finished || used.includes(exercise) ? 'disabled' : ''}><b>${EXERCISES[exercise].name}</b><span>${EXERCISES[exercise].view === 'side' ? 'Side view' : 'Front view'} · ${EXERCISES[exercise].targetReps} reps</span></button>`).join('');
+  $('#moveGuideTitle').textContent = cfg.name + ': what to do';
+  $('#moveSetup').textContent = cfg.setup;
+  $('#moveAction').textContent = cfg.action;
+  $('#moveAngleLabel').textContent = cfg.signal;
+  // Render from this session's attempt, never from the previous controller's tracker.
+  $('#moveReps').textContent = `${attempt?.reps ?? 0} / ${cfg.targetReps}`;
+  $('#moveAngle').textContent = '—';
+  $('#moveTime').textContent = `${((attempt?.trackedMs || 0) / 1000).toFixed(1)} s tracked`;
+  $('#btnMoveEnable').disabled = finished;
+  $('#btnMoveNext').disabled = finished;
+  $('#btnMoveRetry').textContent = finished ? 'Restart movement break' : 'Retry current movement';
+  move.status(finished ? 'completed' : 'idle', finished ? 'This break is finished. Continue to observations or restart it.' : `Camera off. ${cfg.setup}`);
+}
+function beginMovement() {
+  if (state.moveIndex >= ROUTINE_LENGTH) {
+    state.moveIndex = 0;
+    state.session.movementResults.attempts = [];
+  }
+  move.stop(false);
+  state.session.movementResults.attempts.splice(state.moveIndex);
+  movementStatus();
+  renderMovement();
+  saveCurrent();
+  move.start(currentExercise());
+}
+$('#exercisePool').addEventListener('click', e => {
+  const button = e.target.closest('[data-exercise]');
+  if (!button || button.disabled) return;
+  move.stop(false);
+  const m = state.session.movementResults, selected = button.dataset.exercise, old = m.plan[state.moveIndex];
+  const other = m.plan.indexOf(selected);
+  if (other >= 0) m.plan[other] = old;
+  m.plan[state.moveIndex] = selected;
+  m.attempts.splice(state.moveIndex);
+  movementStatus(); saveCurrent(); renderMovement();
+});
+$('#exercisePool').addEventListener('keydown', e => {
+  if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) return;
+  const buttons = $$('#exercisePool button:not(:disabled)'), index = buttons.indexOf(e.target);
+  if (index < 0) return;
+  e.preventDefault();
+  const next = buttons[(index + (['ArrowLeft','ArrowUp'].includes(e.key) ? -1 : 1) + buttons.length) % buttons.length];
+  const id = next.dataset.exercise; next.click(); $(`#exercisePool [data-exercise="${id}"]`).focus();
+});
+$('#btnMoveEnable').addEventListener('click', beginMovement);
+$('#btnMoveRetry').addEventListener('click', beginMovement);
+$('#btnMoveStop').addEventListener('click', () => {
+  const partial = move.stop(true);
+  if (partial) recordMovementAttempt({...partial, status: 'aborted', reason: 'Stopped by user.'});
+});
+$('#btnMoveNext').addEventListener('click', () => {
+  move.stop(false);
+  recordMovementAttempt(emptyAttempt(currentExercise(), 'skipped', 'Skipped by user.'));
+  advanceMovement();
+});
+function finishMovement(keepPartial) {
+  const partial = move.stop(keepPartial);
+  if (partial) recordMovementAttempt({...partial, status: 'insufficient-data', reason: 'Ended before the demo target.'});
+  const m = state.session.movementResults;
+  for (let i = state.moveIndex; i < m.plan.length; i++) if (!m.attempts[i]) m.attempts[i] = emptyAttempt(m.plan[i], 'skipped', 'Continued without this movement.');
+  state.moveIndex = m.plan.length;
+  movementStatus(); saveCurrent(); go(runHash('results'));
+}
+$('#btnMoveSkip').addEventListener('click', () => finishMovement(false));
+$('#btnMoveContinue').addEventListener('click', () => finishMovement(true));
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && move.active) { leaveMovement(); move.status('aborted', 'Camera stopped because the tab was hidden. Retry when ready.'); }
+});
+window.addEventListener('pagehide', leaveMovement);
 
 $('#btnAbortCheck').addEventListener('click', (e) => { e.preventDefault(); stopCheck(); go(runHash('brief')); });
 
@@ -1443,10 +1627,11 @@ const CHECKS = { capture: captureCheck, monitor: monitorCheck, torque: torqueChe
 // Baseline & rule
 // =========================================================
 function computeBaseline(history) {
-  const valid = history.filter((h) => Number.isFinite(h.metric));
+  const valid = history.filter((h) => Number.isFinite(h.metric) && Number.isFinite(h.sleep) && Number.isFinite(h.sleepy));
   state.baselineCount = Math.min(valid.length, BASELINE_N);
   if (valid.length < BASELINE_N) { state.baseline = null; return; }
   const last = valid.slice(-BASELINE_N);
+  if (Math.abs(median(last.map(h => h.metric))) < 1e-6) { state.baseline = null; return; }
   state.baseline = {
     metric: median(last.map((h) => h.metric)),
     sleep: Math.round(median(last.map((h) => h.sleep))),
@@ -1457,15 +1642,12 @@ function useSimulatedBaseline() {
   const c = state.op.crew;
   computeBaseline(c.base.map((m, i) => ({ metric: m, sleep: CREW_SLEEP.base[i], sleepy: CREW_SLEEP.baseSleepy[i] })));
   state.baselineSimulated = true;
+  if (state.session?.cognitiveResults) { state.session.context.baseline.cognitive = 'simulated-fixture'; saveCurrent(); }
 }
 
 function evaluate(today, base) {
   if (!base || !today.valid) return null;
-  const m = state.op.metric;
-  const worse = m.better === 'lower' ? (today.metric - base.metric) / base.metric : (base.metric - today.metric) / base.metric;
-  const sleepLost = base.sleep - today.sleep;
-  const c = { worse: worse >= RULE.worse, sleep: sleepLost >= RULE.sleepLostMin, sleepy: today.sleepy >= RULE.sleepy };
-  return { worse, sleepLost, c, flag: c.worse && (c.sleep || c.sleepy) };
+  return cognitiveRule(today.metric, base.metric, state.op.metric.better, today.sleep, base.sleep, today.sleepy, RULE);
 }
 
 // =========================================================
@@ -1481,11 +1663,12 @@ const BORDER = 0.2;   // up to 20 % beyond a limit = borderline, further = out o
 // value-type indicator: lower or higher is better
 function indValue(key, name, domain, value, unit, fmt, norm, tip) {
   const { max, min } = norm;
+  if (!Number.isFinite(value)) return {key,name,domain,value:'Not recorded',normText:'demo reference unavailable',devText:'No observation',status:'unavailable',tip:'',bar:null};
   let status = 'ok', dev = 0;
   if (max != null && value > max) { dev = (value - max) / max; status = dev <= BORDER ? 'border' : 'out'; }
   if (min != null && value < min) { dev = (min - value) / min; status = dev <= BORDER ? 'border' : 'out'; }
   const normText = max != null && min != null ? `${fmt(min)}–${fmt(max)}` : max != null ? `≤ ${fmt(max)}` : `≥ ${fmt(min)}`;
-  const devText = status === 'ok' ? 'within norm'
+  const devText = status === 'ok' ? 'inside demo band'
     : max != null && value > max ? `+${Math.round(dev * 100)}% above the limit` : `${Math.round(dev * 100)}% below the limit`;
   // scale for the bar
   const top = max != null ? Math.max(max * 1.8, value * 1.1) : Math.max(min * 1.4, value * 1.1, unit === '%' ? 100 : 0);
@@ -1494,10 +1677,10 @@ function indValue(key, name, domain, value, unit, fmt, norm, tip) {
 }
 // count-type indicator: number of events, norm = at most `allowed`
 function indCount(key, name, domain, n, allowed, tip) {
-  n = n || 0;
+  if (!Number.isFinite(n)) return {key,name,domain,value:'Not recorded',normText:'demo allowance '+allowed,devText:'No observation',status:'unavailable',tip:'',bar:null};
   const status = n <= allowed ? 'ok' : n === allowed + 1 ? 'border' : 'out';
   const top = Math.max(allowed + 3, n + 1);
-  return { key, name, domain, value: String(n), normText: allowed ? `≤ ${allowed}` : '0', devText: status === 'ok' ? 'within norm' : `+${n - allowed} over the norm`,
+  return { key, name, domain, value: String(n), normText: allowed ? `≤ ${allowed}` : '0', devText: status === 'ok' ? 'inside demo band' : `+${n - allowed} above demo allowance`,
     status, tip, bar: { v: n / top, a: 0, b: (allowed + 0.5) / top } };
 }
 const ms = (v) => `${Math.round(v)} ms`, pct = (v) => `${Math.round(v)}%`, sec = (v) => `${(v / 1000).toFixed(1)} s`;
@@ -1533,7 +1716,7 @@ const INDICATORS = {
   water: (t, f) => [
     indValue('rt', 'Decision time per unit', 'Processing speed', t.metric, 'ms', ms, { max: 2500 },
       'Read the ID in pairs of characters and compare pair by pair.'),
-    indValue('acc', 'Matching accuracy', 'Visual discrimination', ((6 - (f.errors || 0)) / 6) * 100, '%', pct, { min: 83 },
+    indValue('acc', 'Matching accuracy', 'Visual discrimination', (Number.isFinite(f.errors) ? ((6 - f.errors) / 6) * 100 : null), '%', pct, { min: 83 },
       'Read the ID aloud character by character; let the partner check it against the work order.'),
     indCount('timeouts', 'Work orders timed out', 'Decision under time pressure', f.timeouts, 0,
       'Decide once all characters are checked — do not wait for certainty you cannot get.'),
@@ -1543,7 +1726,7 @@ const INDICATORS = {
       'Rehearse the response card: alarm type → first action → which hatch from where you are.'),
     indCount('priority', 'Caution handled before warning', 'Prioritisation', f.priority, 0,
       'Read the whole alarm board first; warnings always before cautions.'),
-    indCount('spatial', 'Wrong module or hatch', 'Spatial orientation', (f.wrongModule || 0) + (f.wrongHatch || 0), 1,
+    indCount('spatial', 'Wrong module or hatch', 'Spatial orientation', (Number.isFinite(f.wrongModule) && Number.isFinite(f.wrongHatch) ? f.wrongModule + f.wrongHatch : null), 1,
       'Name your own module and the path to the alarm before moving; review the station layout.'),
     indCount('resp', 'Wrong first response', 'Procedure recall', f.wrongResp, 0,
       'Refresh the first-response mapping: fire → extinguisher, toxic → mask, depress → hatch.'),
@@ -1563,52 +1746,34 @@ const INDICATORS = {
       'Chunk the rack while studying: memorise rows of four as a short sequence.'),
     indCount('rot', 'Errors after the rack was turned', 'Mental rotation', f.rotErrors, 1,
       'Before picking, re-locate the A1 corner mark and count from it.'),
-    indValue('time', 'Median time per sample', 'Retrieval speed', f.medTime || 0, 'ms', sec, { max: 4000 },
+    indValue('time', 'Median time per sample', 'Retrieval speed', f.medTime, 'ms', sec, { max: 4000 },
       'Name the slot aloud (row and letter) as soon as you read the record line.'),
   ],
 };
 function sleepIndicators(t) {
   return [
-    indValue('sleep', 'Sleep last night', 'Fatigue', t.sleep, 'min', hrs, { min: 420 },
-      'Protect the next sleep period (7–9 h); schedule demanding tasks after rest when the plan allows.'),
-    Object.assign(indValue('sleepy', 'Sleepiness (1–5)', 'Alertness', t.sleepy, '', (v) => `${v} / 5`, { max: 3 },
-      'A short rest, light and movement before the task; tell the partner how you feel.'),
+    indValue('sleep', 'Sleep last night', 'Sleep log', t.sleep, 'min', hrs, { min: 420 },
+      'Compare the sleep log with recent checks and discuss support with the partner.'),
+    Object.assign(indValue('sleepy', 'Sleepiness (1–5)', 'Self-report', t.sleepy, '', (v) => `${v} / 5`, { max: 3 },
+      'Tell the partner how you feel. The optional movement break is recorded separately.'),
     t.sleepy > 3 ? { status: t.sleepy === 4 ? 'border' : 'out', devText: `+${t.sleepy - 3} above the limit` } : {}),
   ];
 }
-const VERDICT = {
-  ready: ['Ready for this task', 'All indicators are within the norm.', 'ok'],
-  check: ['Ready with a cross-check', 'Some indicators are outside the norm. Do the task with a partner cross-check on the weak points below.', 'warn'],
-  review: ['Review before the task', 'Several indicators are outside the norm. Discuss with the partner (and the flight surgeon) whether to reassign, postpone or add support.', 'bad'],
-};
 function renderIndicators() {
-  const el = $('#indPanel');
-  const t = state.today, o = state.op;
+  const el = $('#indPanel'), t = state.today, o = state.op;
   if (!t || !t.valid || !INDICATORS[o.id]) { el.hidden = true; return; }
-  const f = t.flags || {};
-  const task = INDICATORS[o.id](t, f), fatigue = sleepIndicators(t);
-  const all = [...task, ...fatigue];
-  const out = all.filter((i) => i.status === 'out').length, border = all.filter((i) => i.status === 'border').length;
-  const flagged = state.evaluation && state.evaluation.flag;
-  const v = out >= 2 || (out >= 1 && flagged) ? 'review' : out === 1 || border >= 2 || flagged ? 'check' : border === 1 ? 'check' : 'ready';
-  const [title, text, cls] = VERDICT[v];
-  const row = (i) => `
-    <div class="ind ${i.status}">
-      <div class="ind-head"><span class="ind-name">${esc(i.name)}</span><span class="ind-domain">${esc(i.domain)}</span></div>
-      <div class="ind-bar"><i class="band" style="left:${Math.min(100, i.bar.a * 100)}%;width:${Math.max(0, Math.min(100, (i.bar.b - i.bar.a) * 100))}%"></i><b style="left:${Math.min(98.5, i.bar.v * 100)}%"></b></div>
-      <div class="ind-nums"><span class="ind-val">${esc(i.value)}</span><span>norm ${esc(i.normText)}</span><span class="ind-dev">${esc(i.devText)}</span></div>
-    </div>`;
-  const tips = all.filter((i) => i.status !== 'ok').sort((a, b) => (a.status === 'out' ? -1 : 1) - (b.status === 'out' ? -1 : 1)).map((i) => `<li><b>${esc(i.domain)}:</b> ${esc(i.tip)}</li>`);
+  const task = INDICATORS[o.id](t, t.flags || {}), sleep = sleepIndicators(t);
+  const row = i => `<div class="ind ${i.status}">
+    <div class="ind-head"><span class="ind-name">${esc(i.name)}</span><span class="ind-domain">${esc(i.domain)}</span></div>
+    ${i.bar ? `<div class="ind-bar"><i class="band" style="left:${Math.min(100,i.bar.a*100)}%;width:${Math.max(0,Math.min(100,(i.bar.b-i.bar.a)*100))}%"></i><b style="left:${Math.min(98.5,i.bar.v*100)}%"></b></div>` : ''}
+    <div class="ind-nums"><span class="ind-val">${esc(i.value)}</span><span>demo reference ${esc(i.normText)}</span><span class="ind-dev">${esc(i.devText)}</span></div></div>`;
+  const tips = task.filter(i => ['border','out'].includes(i.status)).map(i => `<li><b>${esc(i.name)}:</b> ${esc(i.tip)}</li>`);
   el.hidden = false;
-  el.innerHTML = `
-    <div class="ind-verdict ${cls}"><span class="label">Readiness for: ${esc(o.short)}</span><h3>${title}</h3><p>${text}</p>
-      <span class="ind-count">${all.length - out - border} in norm · ${border} borderline · ${out} out of norm</span></div>
-    <h4 class="ind-sub">Task indicators</h4>
-    <div class="ind-grid">${task.map(row).join('')}</div>
-    <h4 class="ind-sub">Fatigue</h4>
-    <div class="ind-grid">${fatigue.map(row).join('')}</div>
-    ${tips.length ? `<h4 class="ind-sub">What to improve</h4><ul class="ind-tips">${tips.join('')}</ul>` : '<p class="ind-good">Nothing to improve today — keep the standard procedure.</p>'}
-    <p class="ind-note">Psychomotor and cognitive indicators derived from this check. Reference ranges are demonstration values for this prototype, not clinical norms; this is not a medical or fitness-for-duty assessment. The crew decides with the flight surgeon.</p>`;
+  el.innerHTML = `<div class="ind-verdict"><span class="label">Observed in: ${esc(o.short)}</span><h3>Task observations</h3><p>These bars use illustrative demo references. They do not determine whether a crew member is ready for an operation.</p></div>
+    <h4 class="ind-sub">Task measurements</h4><div class="ind-grid">${task.map(row).join('')}</div>
+    <h4 class="ind-sub">Sleep context</h4><div class="ind-grid">${sleep.map(row).join('')}</div>
+    ${tips.length ? `<h4 class="ind-sub">Cross-check suggestions</h4><ul class="ind-tips">${tips.join('')}</ul>` : ''}
+    <p class="ind-note">Task-derived observations and demonstration reference bands; no combined readiness or medical score. Missing task fields are shown as not recorded. The crew owns follow-up decisions.</p>`;
 }
 
 function renderResults() {
@@ -1625,8 +1790,8 @@ function renderResults() {
     v.innerHTML = `<h3>Repeat the check</h3><p>Not enough of the check was completed to give a reliable ${esc(m.label.toLowerCase())}. Stay on the tab and finish the task.</p>`;
   } else if (!b) {
     v.className = 'verdict';
-    v.innerHTML = `<h3>${esc(m.label)}: ${esc(m.fmt(t.metric))}</h3><p>Your baseline for this mission is still forming: ${state.baselineCount} of ${BASELINE_N} checks on this device. The comparison appears after ${BASELINE_N} checks.</p>`;
-  } else if (ev.flag) {
+    v.innerHTML = `<h3>${esc(m.label)}: ${esc(m.fmt(t.metric))}</h3><p>${state.baselineCount >= BASELINE_N ? 'Comparison unavailable: the recent reference metric is zero or near zero.' : `Your baseline for this mission is still forming: ${state.baselineCount} of ${BASELINE_N} checks on this device. The comparison appears after ${BASELINE_N} checks.`}</p>`;
+  } else if (ev?.flag) {
     const parts = [`${m.label.toLowerCase()} ${Math.round(ev.worse * 100)}% worse than usual`];
     if (ev.c.sleep) parts.push(`${fmtDur(ev.sleepLost)} less sleep`);
     if (ev.c.sleepy) parts.push(`sleepiness ${t.sleepy}/5`);
@@ -1634,7 +1799,7 @@ function renderResults() {
     v.innerHTML = `<h3>Review before task</h3><p>Today: ${esc(parts.join(', '))}. Discuss the result with your ${esc(o.partner)} before you <b>${esc(o.name.toLowerCase())}</b>.</p>`;
   } else {
     v.className = 'verdict ok';
-    v.innerHTML = `<h3>No flagged changes</h3><p>Today's ${esc(m.label.toLowerCase())} is close to your usual. Proceed with the standard procedure.</p>`;
+    v.innerHTML = `<h3>No flagged changes</h3><p>Today's ${esc(m.label.toLowerCase())} did not meet the illustrative review rule. Discuss the observations with your ${esc(o.partner)}.</p>`;
   }
 
   const row = (label, today, usual, change, bad) =>
@@ -1645,10 +1810,10 @@ function renderResults() {
     const dSleep = t.sleep - b.sleep;
     html += row('Sleep last night', fmtSleep(t.sleep), fmtSleep(b.sleep), dSleep === 0 ? 'same' : `${dSleep < 0 ? '−' : '+'}${fmtDur(dSleep)}`, ev && ev.c.sleep);
     html += row('Sleepiness', `${t.sleepy} / 5`, `${b.sleepy} / 5`, t.sleepy === b.sleepy ? 'same' : `${t.sleepy > b.sleepy ? '+' : '−'}${Math.abs(t.sleepy - b.sleepy)}`, ev && ev.c.sleepy);
-    if (t.valid) {
+    if (t.valid && ev) {
       const pct = Math.round(ev.worse * 100);
       html += row(esc(m.label), esc(m.fmt(t.metric)), esc(m.fmt(b.metric)), pct === 0 ? 'same' : `${pct > 0 ? 'worse' : 'better'} by ${Math.abs(pct)}%`, ev.c.worse);
-    } else html += row(esc(m.label), dash, esc(m.fmt(b.metric)), dash);
+    } else html += row(esc(m.label), t.valid ? esc(m.fmt(t.metric)) : dash, esc(m.fmt(b.metric)), 'comparison unavailable');
   } else {
     html += row('Sleep last night', fmtSleep(t.sleep), dash, dash);
     html += row('Sleepiness', `${t.sleepy} / 5`, dash, dash);
@@ -1657,23 +1822,67 @@ function renderResults() {
   t.extras.forEach(([label, val, bad]) => { html += row(esc(label), esc(val), dash, dash, false).replace('<td>' + esc(val), `<td class="${bad ? 'delta-bad' : ''}">` + esc(val)); });
   $('#compareBody').innerHTML = html;
 
-  status.set(o.id, !t.valid ? 'retry' : !b ? 'forming' : ev.flag ? 'review' : 'clear');
+  status.set(o.id, !t.valid ? 'retry' : !b ? 'forming' : ev?.flag ? 'review' : 'clear');
   $('#baselineHelp').hidden = !(t.valid && !b && state.mode === 'guest');
   const rule = $('#rulePanel');
   if (ev) {
     rule.hidden = false;
-    rule.innerHTML = `<h4>Why this result${state.baselineSimulated ? ' · baseline is simulated' : ''}</h4><ul>
+    rule.innerHTML = `<h4>Why this result${state.baselineSimulated ? ' · baseline is simulated' : ''}</h4>
+      <p>Review when the task metric is at least ${RULE.worse * 100}% worse <b>AND</b> (sleep is at least ${RULE.sleepLostMin / 60} h shorter <b>OR</b> sleepiness is ${RULE.sleepy}–5/5).</p><ul>
       <li class="${ev.c.worse ? 'met' : ''}">${esc(m.label)} at least ${RULE.worse * 100}% worse than usual</li>
       <li class="${ev.c.sleep ? 'met' : ''}">and at least ${RULE.sleepLostMin / 60} h less sleep than usual</li>
       <li class="${ev.c.sleepy ? 'met' : ''}">or sleepiness ${RULE.sleepy}–5 of 5</li></ul>
       <p>Demo thresholds for the hackathon scenario. The card explains what changed; the crew decides how to proceed.</p>`;
   } else rule.hidden = true;
   renderIndicators();
+  renderMovementResults();
+}
+
+function renderMovementResults() {
+  const m = state.session.movementResults, rows = readSessions().rows;
+  const labels = {'not-started':'Not started',completed:'Both movements completed',partial:'Partly completed',skipped:'Skipped',aborted:'Interrupted',unavailable:'Unavailable'};
+  $('#movementResult').innerHTML = `<p><b>${labels[m.status] || m.status}</b></p>` + m.plan.map((id, i) => {
+    const a = m.attempts[i], name = EXERCISES[id].name;
+    if (!a) return `<p>${i + 1}. ${name}: not started.</p>`;
+    const measured = a.reps !== null ? `${a.reps}/${a.targetReps} complete repetitions; ${(a.trackedMs / 1000).toFixed(1)} s tracked; ${(a.lostMs / 1000).toFixed(1)} s lost; ${a.interruptions} interruptions.` : 'No camera measurements.';
+    const detail = a.repetitions.length ? ` Mean estimated range ${a.meanRangeDeg.toFixed(1)}°; ${a.meanDurationSec.toFixed(1)} s/rep. Variation: ${a.rangeVariationDeg ?? '—'}° and ${a.timingVariationSec ?? '—'} s.` : '';
+    return `<article class="move-result"><h4>${i + 1}. ${name} · ${esc(a.status)}</h4><p>${measured}${detail}</p>${a.reason ? `<p class="muted small">${esc(a.reason)}</p>` : ''}</article>`;
+  }).join('') + '<p class="muted small">Earth training webcam estimates. These observations do not establish alertness, health, or operational clearance.</p>';
+  $('#movementBaseline').innerHTML = m.plan.map(id => {
+    const refs = movementReferences(state.session, rows, id), current = m.attempts.find(a => a.exercise === id);
+    if (refs.length >= BASELINE_N && current?.status === 'completed') {
+      const range = median(refs.map(a => a.meanRangeDeg)), time = median(refs.map(a => a.meanDurationSec));
+      state.session.context.baseline.movement[id] = 'local-recent';
+      const delta = (value, unit) => `${value >= 0 ? '+' : '−'}${Math.abs(value).toFixed(1)} ${unit}`;
+      return `<p>${EXERCISES[id].name}: recent median of 5 prior camera sessions ${range.toFixed(1)}° and ${time.toFixed(1)} s/rep; current change ${delta(current.meanRangeDeg - range, '°')}, ${delta(current.meanDurationSec - time, 's')}. These are observations, not targets.</p>`;
+    }
+    state.session.context.baseline.movement[id] = 'forming';
+    return `<p>${EXERCISES[id].name}: baseline forming ${refs.length}/${BASELINE_N} compatible prior camera sessions.</p>`;
+  }).join('');
+  saveCurrent();
+  $('#storageStatus').textContent = state.historyCleared ? 'Local history cleared. This in-memory result will not be saved again.' : state.storageWarning ? `Local save: ${state.storageWarning}` : `Browser-local session ${state.session.context.sessionId.slice(0, 8)} · ${state.session.context.profileScope} · cognitive source: ${state.session.cognitiveResults?.source || 'none'} · cognitive reference: ${state.session.context.baseline.cognitive}.`;
 }
 
 $('#btnDemoBaseline').addEventListener('click', () => { useSimulatedBaseline(); renderResults(); toast('Simulated five-check baseline loaded'); });
-$('#btnRepeat').addEventListener('click', () => go(runHash('check')));
+$('#btnRepeat').addEventListener('click', () => { const sleep = state.pendingSleep, sleepy = state.sleepy; resetRun(state.op); state.pendingSleep = sleep; state.sleepy = sleepy; go(runHash('check')); });
 $('#btnToPlan').addEventListener('click', () => go(runHash('plan')));
+$('#btnClearHistory').addEventListener('click', () => {
+  const cleared = clearSessions();
+  let legacyCleared = true;
+  for (const op of OPS) { try { localStorage.removeItem(STORAGE_PREFIX + op.id); } catch { legacyCleared = false; } }
+  try { localStorage.removeItem('crewready.v4.sessions'); } catch { legacyCleared = false; }
+  state.storageWarning = cleared && legacyCleared ? null : 'Some browser history could not be cleared.';
+  if (cleared) { state.historyCleared = true; state.session.syncStatus = {state: 'not-saved', at: new Date().toISOString(), reason: 'Local history cleared by user.'}; }
+  toast(cleared && legacyCleared ? 'Local session and legacy history cleared' : 'Some local history could not be cleared');
+  if (state.mode === 'guest') { state.baseline = null; state.baselineCount = 0; state.baselineSimulated = false; }
+  renderResults();
+});
+$('#btnExportSession').addEventListener('click', () => {
+  const json = JSON.stringify(state.session, null, 2);
+  const url = URL.createObjectURL(new Blob([json], {type: 'application/json'}));
+  const a = document.createElement('a'); a.href = url; a.download = `crewready-session-${state.session.context.sessionId}.json`; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 
 // =========================================================
 // Plan — the suggested cross-check depends on the mission and on what went wrong
@@ -1713,12 +1922,12 @@ function agreementText() {
   const hit = tips.find(([cond]) => cond);
   if (hit) return hit[1];
   if (flagged) return `Keep the ${P} on the critical step today: ${o.step.toLowerCase()}.`;
-  return `Standard procedure with the ${P}: ${o.step.toLowerCase()}.`;
+  return `Cross-check with the ${P}: ${o.step.toLowerCase()}.`;
 }
 
 function renderPlan() {
-  $('#agreement').value = agreementText();
-  $('#agreed').checked = false;
+  $('#agreement').value = state.session.context.agreement?.step ?? agreementText();
+  $('#agreed').checked = state.session.context.agreement?.discussed ?? false;
   $('#agreedLbl').textContent = `Discussed with the ${state.op.partner}`;
   renderSummary();
 }
@@ -1726,23 +1935,39 @@ function renderPlan() {
 function renderSummary() {
   const t = state.today, b = state.baseline, ev = state.evaluation, o = state.op, m = o.metric;
   const L = [];
-  L.push('CrewReady: pre-task readiness assessment');
+  L.push('CrewReady: pre-task observations');
   if (session.data) L.push(`Crew: ${session.data.pos} ${session.data.call} · ${new Date().toISOString().slice(0, 16).replace('T', ' ')} GMT`);
   L.push(`Operation: ${o.name}`);
   L.push(`Critical step: ${o.step}`);
   L.push(`Check: ${o.title} (${o.skill})`);
   L.push(`Session: ${state.mode === 'crew' ? (t && t.recorded ? 'training scenario, recorded check (simulated)' : 'training scenario, live check vs simulated history') : 'live assessment'}${state.baselineSimulated && state.mode === 'guest' ? ', simulated baseline' : ''}`);
+  L.push('Context: Earth training demo; cognitive check before optional movement.');
+  L.push('Cognitive observations:');
   if (t) {
     L.push(`Sleep: ${fmtSleep(t.sleep)}${b ? ` (usual ${fmtSleep(b.sleep)})` : ''}`);
     L.push(`Sleepiness: ${t.sleepy}/5${b ? ` (usual ${b.sleepy}/5)` : ''}`);
     L.push(`${m.label}: ${t.valid ? m.fmt(t.metric) : 'not enough data'}${b && ev ? ` (usual ${m.fmt(b.metric)}, ${ev.worse >= 0 ? 'worse' : 'better'} by ${Math.abs(Math.round(ev.worse * 100))}%)` : (t.valid ? ' (baseline forming)' : '')}`);
     t.extras.forEach(([label, val]) => L.push(`${label}: ${val}`));
   }
+  const mov = state.session?.movementResults;
+  L.push('Movement observations:');
+  L.push(`MoveCheck (Earth demo): ${mov?.status || 'not-started'}`);
+  mov?.plan.forEach((id, i) => {
+    const a = mov.attempts[i];
+    L.push(`${EXERCISES[id].name}: ${a?.status || 'not-started'}${a?.reps !== null && a?.reps !== undefined ? `; ${a.reps}/${a.targetReps} reps` : ''}`);
+    if (a?.repetitions.length) L.push(`Estimated range ${a.meanRangeDeg.toFixed(1)}°; ${a.meanDurationSec.toFixed(1)} s/rep; tracking interruptions ${a.interruptions}.`);
+    L.push(`Movement reference: ${state.session.context.baseline.movement[id] || 'forming'}.`);
+  });
+  L.push(`Cognitive reference: ${state.session?.context.baseline.cognitive || 'none'}.`);
   L.push(`Result: ${ev ? (ev.flag ? 'REVIEW BEFORE TASK' : 'no flagged changes') : 'no comparison yet'}`);
   L.push(`Agreed step: ${$('#agreement').value.trim() || '—'}`);
   L.push(`Discussed with ${o.partner}: ${$('#agreed').checked ? 'yes' : 'not yet'}`);
   L.push('The crew decides whether and how to proceed.');
   $('#summary').textContent = L.join('\n');
+  if (state.session) {
+    state.session.context.agreement = {step: $('#agreement').value.trim().slice(0, 500), discussed: $('#agreed').checked};
+    saveCurrent();
+  }
 }
 $('#agreement').addEventListener('input', renderSummary);
 $('#agreed').addEventListener('change', renderSummary);
