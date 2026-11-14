@@ -3,155 +3,305 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CrewReady</title>
+<title>CrewReady — pre-task readiness for ISS crews</title>
+<meta name="description" content="CrewReady: a pre-task attention check for ISS crews. NASA Space Apps Challenge 2026 prototype.">
+<link rel="icon" href="assets/img/emblem.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header class="topbar">
-  <button class="brand" data-go="home" aria-label="CrewReady home"><span class="logo" aria-hidden="true"></span>CrewReady</button>
-  <div class="topbar-right">
-    <span id="modeBadge" class="badge" hidden></span>
-    <span class="badge badge-muted">Hackathon prototype</span>
+
+<!-- ============================ INTRO ============================ -->
+<div id="intro" class="intro" role="dialog" aria-label="CrewReady intro">
+  <video id="introVideo" class="intro-video" autoplay muted playsinline preload="auto"
+         poster="assets/video/iss-earth-poster.jpg">
+    <source src="assets/video/iss-earth.mp4" type="video/mp4">
+  </video>
+  <div class="intro-shade"></div>
+  <div class="intro-content">
+    <p class="intro-kicker">NASA Space Apps Challenge 2026 · Prototype</p>
+    <img class="intro-emblem" src="assets/img/emblem.svg" alt="" width="132" height="132">
+    <h1 class="intro-title">CrewReady</h1>
+    <p class="intro-sub">Pre-task readiness check for International Space Station crews</p>
+    <button class="btn btn-primary btn-lg" id="btnEnter">Enter mission control</button>
+  </div>
+  <div class="intro-bar"><div id="introProgress"></div></div>
+  <button class="intro-skip" id="btnSkip">Skip intro ›</button>
+  <p class="intro-credit">Video: NASA — Earth views from the International Space Station</p>
+</div>
+
+<!-- ============================ NAV ============================ -->
+<header class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#/" aria-label="CrewReady home">
+      <img src="assets/img/emblem.svg" alt="" width="34" height="34">
+      <span>CrewReady</span>
+    </a>
+    <button class="nav-toggle" id="navToggle" aria-label="Menu" aria-expanded="false">☰</button>
+    <nav class="nav-links" id="navLinks">
+      <a href="#/" data-nav="home">Home</a>
+      <a href="#/tasks" data-nav="tasks">Tasks</a>
+      <a href="#/about" data-nav="about">Science &amp; About</a>
+      <a href="#/tasks" class="nav-cta">Start a check</a>
+    </nav>
   </div>
 </header>
 
-<main>
-  <!-- HOME -->
-  <section id="screen-home" class="screen active">
-    <p class="eyebrow">Pre-task readiness check</p>
-    <h1>Check your attention before a critical task.</h1>
-    <p class="lead">Log your sleep, take a short reaction check, see how today compares with your usual — then agree with your partner on which step to double-check.</p>
-    <div class="cta-row">
-      <button class="btn btn-primary btn-lg" id="btnGuest">Try the reaction test</button>
-      <button class="btn btn-lg" id="btnCrew">Run crew scenario</button>
-    </div>
-    <ol class="flow">
-      <li><b>1</b>Task &amp; sleep</li>
-      <li><b>2</b>Reaction check</li>
-      <li><b>3</b>Today vs usual</li>
-      <li><b>4</b>Rehearse the critical step</li>
-      <li><b>5</b>Agree with partner</li>
-    </ol>
-    <p class="fineprint">The demo test lasts 25 s. It follows the idea of the Reaction Self-Test used on the ISS (a 3-minute psychomotor vigilance test). This prototype is not a validated medical or fitness-for-duty measure — the crew makes every decision.</p>
-  </section>
+<main id="app">
 
-  <!-- BRIEF -->
-  <section id="screen-brief" class="screen">
-    <div class="sim-banner" data-crew-only>Simulated crew data — prefilled profile for the demo</div>
-    <p class="eyebrow">Step 1 · Before the task</p>
-    <h2>Upcoming task</h2>
-    <div id="opList" class="op-list" role="radiogroup" aria-label="Upcoming task"></div>
-
-    <div class="grid2">
-      <div class="field">
-        <span class="label">Sleep last night</span>
-        <div class="sleep-inputs">
-          <input id="sleepH" type="number" inputmode="numeric" min="0" max="14" value="7" aria-label="Hours"> <span>h</span>
-          <input id="sleepM" type="number" inputmode="numeric" min="0" max="59" step="5" value="0" aria-label="Minutes"> <span>min</span>
+  <!-- ============================ HOME ============================ -->
+  <section class="page" data-page="home">
+    <div class="hero">
+      <img class="hero-img" src="assets/img/hero.jpg" alt="Canadarm2 holding a Cygnus cargo spacecraft above Earth">
+      <div class="hero-shade"></div>
+      <div class="hero-content wrap">
+        <p class="kicker">Pre-task readiness · ISS operations</p>
+        <h1 class="display">Check your attention<br>before a critical task.</h1>
+        <p class="lead">CrewReady gives an astronaut a two-minute read on how alert they are right now, compared with their own usual. Then it helps them rehearse the critical step and agree a cross-check with their partner.</p>
+        <div class="cta-row">
+          <a class="btn btn-primary btn-lg" href="#/tasks">Choose a task</a>
+          <a class="btn btn-outline btn-lg" href="#/about">How it works</a>
         </div>
       </div>
-      <div class="field">
-        <span class="label" id="sleepyLbl">Sleepiness right now</span>
-        <div class="seg" id="sleepiness" role="radiogroup" aria-labelledby="sleepyLbl"></div>
-        <div class="seg-legend"><span>1 · wide awake</span><span>5 · struggling to stay awake</span></div>
+      <p class="hero-credit">Image: NASA — Cygnus capture by Canadarm2 (ISS037)</p>
+    </div>
+
+    <div class="wrap section">
+      <div class="section-head">
+        <p class="kicker">The problem</p>
+        <h2 class="h2">Fatigue is hard to notice from the inside</h2>
+      </div>
+      <div class="cards3">
+        <article class="info-card">
+          <span class="info-num">01</span>
+          <h3>Shifted schedules</h3>
+          <p>Docking, cargo capture and spacewalk timelines often move crew sleep away from their normal rhythm.</p>
+        </article>
+        <article class="info-card">
+          <span class="info-num">02</span>
+          <h3>Self-rating is unreliable</h3>
+          <p>People who lose sleep tend to underestimate how much their reaction time and vigilance have dropped.</p>
+        </article>
+        <article class="info-card">
+          <span class="info-num">03</span>
+          <h3>High-cost moments</h3>
+          <p>A single early or late command during a capture or a valve swap can be expensive. A short check right before the task gives the crew facts to talk about.</p>
+        </article>
       </div>
     </div>
 
-    <div class="actions">
-      <button class="btn btn-ghost" data-go="home">Back</button>
-      <button class="btn btn-primary" id="btnStartCheck">Start reaction check</button>
-    </div>
-  </section>
-
-  <!-- TEST -->
-  <section id="screen-test" class="screen">
-    <p class="eyebrow">Step 2 · Reaction check <span class="tag">Demo test · 25 s</span></p>
-    <div id="testArea" class="test-area" tabindex="-1">
-      <div id="testIntro" class="test-intro">
-        <p class="test-instr">Keep a finger on <kbd>Space</kbd>. Press it the moment the signal lights up.<br>Don't press before it appears.</p>
-        <button class="btn btn-primary btn-lg" id="btnBeginTest">Begin</button>
+    <div class="band">
+      <div class="wrap section">
+        <div class="section-head">
+          <p class="kicker">How it works</p>
+          <h2 class="h2">Four steps, about two minutes</h2>
+        </div>
+        <ol class="steps">
+          <li><span class="step-n">1</span><h3>Task &amp; sleep</h3><p>Pick the upcoming operation, log last night's sleep and how sleepy you feel.</p></li>
+          <li><span class="step-n">2</span><h3>Mission check</h3><p>A short interactive test built for that operation. It measures the skill that the critical step needs.</p></li>
+          <li><span class="step-n">3</span><h3>Today vs usual</h3><p>Your result is compared with the median of your last five checks of the same mission, not with other people.</p></li>
+          <li><span class="step-n">4</span><h3>Agree with partner</h3><p>CrewReady suggests one cross-check for the critical step, based on what went wrong in the check.</p></li>
+        </ol>
       </div>
-      <div id="signal" class="signal" aria-hidden="true"></div>
-      <p id="testFeedback" class="test-feedback" aria-live="polite"></p>
     </div>
-    <div class="progress"><div id="testProgress"></div></div>
-    <div class="actions">
-      <button class="btn btn-ghost" id="btnAbortTest">Cancel</button>
-      <span class="hint">Space or tap/click inside the panel</span>
-    </div>
-  </section>
 
-  <!-- RESULTS -->
-  <section id="screen-results" class="screen">
-    <div class="sim-banner" data-crew-only>Simulated crew data — five previous checks and today's recorded check</div>
-    <p class="eyebrow">Step 3 · Today vs your usual</p>
-    <div id="verdict" class="verdict"></div>
-    <table class="compare">
-      <thead><tr><th></th><th>Today</th><th>Your usual</th><th>Change</th></tr></thead>
-      <tbody id="compareBody"></tbody>
-    </table>
-    <div id="rulePanel" class="rule-panel"></div>
-    <div class="actions">
-      <button class="btn btn-ghost" id="btnRepeat">Repeat check</button>
-      <button class="btn btn-primary" id="btnToRehearse">Rehearse the critical step</button>
-    </div>
-  </section>
-
-  <!-- REHEARSE -->
-  <section id="screen-rehearse" class="screen">
-    <p class="eyebrow">Step 4 · Rehearse the critical step <span class="tag">Simplified simulation</span></p>
-    <h2 id="rehTitle">Capture Cygnus</h2>
-    <p class="muted">Align the reticle with the grapple fixture using <kbd>←</kbd> <kbd>→</kbd>. Even when aligned, wait for your backup operator. Press <kbd>Space</kbd> only on <b>CAPTURE</b>.</p>
-
-    <div class="reh-wrap">
-      <div id="field" class="field-sim">
-        <div class="track"></div>
-        <div id="target" class="target"><span></span></div>
-        <div id="reticle" class="reticle"></div>
-        <div id="rehOverlay" class="overlay">
-          <button class="btn btn-primary btn-lg" id="btnStartRound">Start round</button>
+    <div class="wrap section">
+      <div class="split">
+        <img class="split-img" src="assets/img/science.jpg" alt="An astronaut working at laptops aboard the ISS">
+        <div>
+          <p class="kicker">Built on a flight-proven idea</p>
+          <h2 class="h2">Inspired by the ISS Reaction Self-Test</h2>
+          <p>Crews on the International Space Station have used a 3-minute psychomotor vigilance test to see how fatigue affects their performance. CrewReady takes that idea further. A generic reaction test is replaced with a check for each mission: timing for a capture, vigilance for a docking, fine motor control for a spacewalk, working memory for an experiment. Each result is compared with your own baseline for that mission.</p>
+          <p class="muted">CrewReady is a hackathon prototype. It is not a validated medical or fitness-for-duty tool, and the crew makes every decision.</p>
+          <a class="btn btn-outline" href="#/about">Read the science</a>
         </div>
       </div>
-      <aside class="cmd-panel">
-        <span class="label">Backup operator</span>
-        <div id="cmd" class="cmd hold">HOLD</div>
-        <div id="alignState" class="align-state">Not aligned</div>
-        <div class="pad">
-          <button class="btn pad-btn" id="padLeft" aria-label="Move left">◀</button>
-          <button class="btn pad-btn pad-cap" id="padCapture">Capture</button>
-          <button class="btn pad-btn" id="padRight" aria-label="Move right">▶</button>
-        </div>
-      </aside>
     </div>
 
-    <div id="rehResult" class="reh-result" hidden></div>
-    <div class="actions">
-      <button class="btn btn-ghost" data-go="results">Back to results</button>
-      <button class="btn" id="btnRetry" hidden>Try again</button>
-      <button class="btn btn-primary" id="btnToPlan" hidden>Agree the next step</button>
+    <div class="band">
+      <div class="wrap section">
+        <div class="section-head">
+          <p class="kicker">Operations covered</p>
+          <h2 class="h2">Seven missions, seven different checks</h2>
+        </div>
+        <div id="homeTasks" class="task-strip"></div>
+        <div class="center"><a class="btn btn-primary btn-lg" href="#/tasks">Open all tasks</a></div>
+      </div>
     </div>
   </section>
 
-  <!-- PLAN -->
-  <section id="screen-plan" class="screen">
-    <p class="eyebrow">Step 5 · Agree with your partner</p>
-    <h2>Before the task</h2>
-    <div class="field">
-      <label class="label" for="agreement">Step to agree with the backup operator</label>
-      <textarea id="agreement" rows="3"></textarea>
+  <!-- ============================ TASKS ============================ -->
+  <section class="page" data-page="tasks">
+    <div class="wrap section page-top">
+      <div class="section-head">
+        <p class="kicker">Mission tasks</p>
+        <h2 class="h2">Choose the upcoming operation</h2>
+        <p class="lead small">Each mission has its own interactive check, designed around the skill that its critical step needs.</p>
+      </div>
+
+      <div class="mode-switch" role="radiogroup" aria-label="Mode">
+        <button role="radio" data-mode="guest" aria-checked="true">
+          <b>Live test</b><span>Take the reaction test yourself</span>
+        </button>
+        <button role="radio" data-mode="crew" aria-checked="false">
+          <b>Crew scenario</b><span>Simulated astronaut after a short night</span>
+        </button>
+      </div>
+
+      <div id="taskGrid" class="task-grid"></div>
     </div>
-    <label class="check"><input type="checkbox" id="agreed"> Discussed with the backup operator</label>
-    <div class="field">
-      <span class="label">Summary for the crew</span>
-      <pre id="summary" class="summary"></pre>
+  </section>
+
+  <!-- ============================ ABOUT ============================ -->
+  <section class="page" data-page="about">
+    <div class="wrap section page-top narrow">
+      <p class="kicker">Science &amp; About</p>
+      <h2 class="h2">What CrewReady measures and why</h2>
+
+      <h3 class="h3">One mission, one check</h3>
+      <p>Sleep loss does not hurt every skill equally. A capture needs precise timing on a partner's call, a docking needs sustained vigilance, a spacewalk needs fine motor control and the right sequence, and an experiment needs working memory. So CrewReady does not run one generic reaction test. Each mission has its own 30–45-second check that exercises the skill its critical step depends on:</p>
+      <ul class="rule-list">
+        <li><b>Cargo capture</b>: 2D arm steering, act only on the CAPTURE call. Metric: response time to the call.</li>
+        <li><b>Docking monitor</b>: three approach indicators. Metric: time to flag an out-of-range value.</li>
+        <li><b>Solar array EVA</b>: memorise the bolt order, then torque each bolt into the green window. Metric: torque error.</li>
+        <li><b>Water recovery</b>: match a unit ID among look-alikes. Metric: decision time per item.</li>
+        <li><b>Emergency drill</b>: locate the alarmed module on the station map and pick the right response. Metric: response time.</li>
+        <li><b>Ultrasound</b>: keep the probe on a moving vessel until the image is stable. Metric: time on target.</li>
+        <li><b>Microgravity experiment</b>: remember the sample tray, then find samples from the record. Metric: recall accuracy.</li>
+      </ul>
+      <p>The idea comes from the psychomotor vigilance test that ISS crews use as the Reaction Self-Test. It is very sensitive to sleep loss, and it shows that a short, repeatable test compared with your own baseline can reveal fatigue that people do not notice themselves.</p>
+
+      <h3 class="h3">Your usual, not an average person</h3>
+      <p>Performance differs a lot between people, so CrewReady compares you only with yourself: the median of your last five valid checks of the same mission on this device.</p>
+
+      <h3 class="h3">When the card says “Review before task”</h3>
+      <ul class="rule-list">
+        <li>the mission metric is at least <b>20%</b> worse than your usual, <b>and</b></li>
+        <li>at least <b>2 h</b> less sleep than usual, <b>or</b> sleepiness <b>4–5 of 5</b>.</li>
+      </ul>
+      <p class="muted">These are demo thresholds for the hackathon scenario, not clinical limits.</p>
+
+      <h3 class="h3">Two modes</h3>
+      <p><b>Live test</b>: you take the mission check yourself. The history stays in this browser's local storage and is never sent anywhere. <b>Crew scenario</b>: a simulated crew member after a short night (5 h 10 min, sleepiness 4/5) with five normal checks of each mission. You can play the mission check yourself and compare it with that history, or load the crew member's recorded check for today. The jury can see the full flow in two minutes.</p>
+
+      <h3 class="h3">Credits</h3>
+      <p>Photographs and video: NASA (images.nasa.gov), used under NASA's media guidelines. NASA does not endorse this project. Built for the NASA Space Apps Challenge 2026.</p>
+      <a class="btn btn-primary" href="#/tasks">Start a check</a>
     </div>
-    <p class="fineprint">CrewReady explains what changed. Whether and how to proceed is the crew's decision.</p>
-    <div class="actions">
-      <button class="btn btn-ghost" data-go="home">Back to start</button>
-      <button class="btn btn-primary" id="btnCopy">Copy summary</button>
+  </section>
+
+  <!-- ============================ RUN ============================ -->
+  <section class="page" data-page="run">
+    <div class="wrap section page-top">
+      <div class="run-head">
+        <a class="back-link" href="#/tasks">‹ All tasks</a>
+        <span id="runMode" class="chip"></span>
+      </div>
+      <ol class="stepper" id="stepper">
+        <li data-step="brief"><span>1</span>Task &amp; sleep</li>
+        <li data-step="check"><span>2</span>Mission check</li>
+        <li data-step="results"><span>3</span>Today vs usual</li>
+        <li data-step="plan"><span>4</span>Agree</li>
+      </ol>
+
+      <!-- BRIEF -->
+      <div class="pane" data-pane="brief">
+        <div class="sim-banner" data-crew-only>Simulated crew data: a prefilled profile for the demo</div>
+        <div class="task-hero">
+          <img id="briefImg" alt="">
+          <div>
+            <p class="kicker" id="briefKicker"></p>
+            <h2 class="h2" id="briefName"></h2>
+            <p class="muted" id="briefDetail"></p>
+            <p class="crit"><span>Critical step</span><b id="briefStep"></b></p>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="field">
+            <span class="label">Sleep last night</span>
+            <div class="sleep-inputs">
+              <input id="sleepH" type="number" inputmode="numeric" min="0" max="14" value="7" aria-label="Hours"><span>h</span>
+              <input id="sleepM" type="number" inputmode="numeric" min="0" max="59" step="5" value="0" aria-label="Minutes"><span>min</span>
+            </div>
+          </div>
+          <div class="field">
+            <span class="label" id="sleepyLbl">Sleepiness right now</span>
+            <div class="seg" id="sleepiness" role="radiogroup" aria-labelledby="sleepyLbl"></div>
+            <div class="seg-legend"><span>1 · wide awake</span><span>5 · fighting sleep</span></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <a class="btn btn-ghost" href="#/tasks">Back</a>
+          <button class="btn btn-outline" id="btnLoadRecorded" data-crew-only>Load recorded check (simulated)</button>
+          <button class="btn btn-primary" id="btnStartCheck">Start mission check</button>
+        </div>
+      </div>
+
+      <!-- MISSION CHECK -->
+      <div class="pane" data-pane="check">
+        <div class="pane-title"><h2 class="h2" id="chkTitle"></h2><span class="tag" id="chkSkill"></span></div>
+        <p class="muted" id="chkInstr"></p>
+        <div id="chkStage" class="reh-stage"></div>
+        <div class="actions">
+          <a class="btn btn-ghost" id="btnAbortCheck" href="#">Cancel</a>
+          <span class="hint" id="chkKeys"></span>
+        </div>
+      </div>
+
+      <!-- RESULTS -->
+      <div class="pane" data-pane="results">
+        <div class="sim-banner" data-crew-only id="resBanner">Simulated crew history: five previous checks of this mission</div>
+        <div id="verdict" class="verdict"></div>
+        <div class="table-wrap">
+          <table class="compare">
+            <thead><tr><th scope="col">Measure</th><th scope="col">Today</th><th scope="col">Your usual</th><th scope="col">Change</th></tr></thead>
+            <tbody id="compareBody"></tbody>
+          </table>
+        </div>
+        <div id="baselineHelp" class="note" hidden>
+          <p>Your personal baseline for this mission needs five checks on this device. To see the comparison now, you can load a <b>simulated</b> five-check history. It is clearly marked and is not saved.</p>
+          <button class="btn btn-outline" id="btnDemoBaseline">Use simulated baseline</button>
+        </div>
+        <div id="rulePanel" class="rule-panel" hidden></div>
+        <div class="actions">
+          <button class="btn btn-ghost" id="btnRepeat">Repeat mission check</button>
+          <button class="btn btn-primary" id="btnToPlan">Agree with partner</button>
+        </div>
+      </div>
+
+      <!-- PLAN -->
+      <div class="pane" data-pane="plan">
+        <h2 class="h2">Before the task</h2>
+        <div class="field">
+          <label class="label" for="agreement">Step to agree with your partner</label>
+          <textarea id="agreement" rows="3"></textarea>
+        </div>
+        <label class="check"><input type="checkbox" id="agreed"> <span id="agreedLbl">Discussed with the backup operator</span></label>
+        <div class="field">
+          <span class="label">Summary for the crew</span>
+          <pre id="summary" class="summary"></pre>
+        </div>
+        <p class="muted small">CrewReady explains what changed. Whether and how to proceed is the crew's decision.</p>
+        <div class="actions">
+          <a class="btn btn-ghost" href="#/tasks">Choose another task</a>
+          <button class="btn btn-primary" id="btnCopy">Copy summary</button>
+        </div>
+      </div>
     </div>
   </section>
 </main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div class="brand small"><img src="assets/img/emblem.svg" alt="" width="26" height="26"><span>CrewReady</span></div>
+    <p>NASA Space Apps Challenge 2026 prototype. Imagery courtesy of NASA; NASA does not endorse this project. Not a medical device.</p>
+    <button class="link-btn" id="btnReplayIntro">Replay intro</button>
+  </div>
+</footer>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script src="app.js"></script>
